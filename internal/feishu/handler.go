@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/estongu/hermes-feishu-router/internal/hub"
+	"github.com/estongu/hermes-feishu-router/internal/model"
 )
 
 // ConversationService 是飞书适配层所需的最小 Hub 能力，便于隔离 SDK 并进行单测。
@@ -46,6 +47,7 @@ type Message struct {
 	UserID  string
 	ChatID  string
 	Text    string
+	Images  []model.ImageAttachment
 }
 
 // Handler 处理飞书文本消息，并把 Hub 的最终文本回复发回原聊天。
@@ -76,6 +78,7 @@ func (h *Handler) Handle(ctx context.Context, message Message) error {
 		FeishuUserID: message.UserID,
 		ChatID:       message.ChatID,
 		Text:         message.Text,
+		Images:       message.Images,
 	}
 	if !h.streamEnabled {
 		reply, err := h.service.Handle(ctx, hubMessage)

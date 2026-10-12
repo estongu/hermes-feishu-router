@@ -6,19 +6,26 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
+	"mime"
+	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
 	channel "github.com/larksuite/channel-sdk-go"
 	channeltypes "github.com/larksuite/channel-sdk-go/types"
+	lark "github.com/larksuite/oapi-sdk-go/v3"
+	larkim "github.com/larksuite/oapi-sdk-go/v3/service/im/v1"
 
 	"github.com/estongu/hermes-feishu-router/internal/config"
 	"github.com/estongu/hermes-feishu-router/internal/ekko"
 	feishuadapter "github.com/estongu/hermes-feishu-router/internal/feishu"
 	"github.com/estongu/hermes-feishu-router/internal/hub"
+	"github.com/estongu/hermes-feishu-router/internal/model"
 	"github.com/estongu/hermes-feishu-router/internal/platform"
 	"github.com/estongu/hermes-feishu-router/internal/store"
 )
@@ -88,6 +95,7 @@ func newFeishuClients(apps []config.FeishuAppConfig, streamEnabled, debugLogEven
 			return nil, fmt.Errorf("创建飞书应用 %s 的长连接: %w", app.Name, err)
 		}
 		handler := feishuadapter.NewHandler(service, channelSender{client: client}, streamEnabled)
+		resourceDownloader := newMessageImageDownloader(app.AppID, app.AppSecret)
 		appID := app.AppID
 		appName := app.Name
 		client.OnMessage(func(messageCtx context.Context, message *channel.NormalizedMessage) error {
@@ -107,18 +115,81 @@ func newFeishuClients(apps []config.FeishuAppConfig, streamEnabled, debugLogEven
 			if eventID == "" {
 				eventID = message.MessageID
 			}
+			content := feishuadapter.ParseInboundContent(message.Content, message.RawEvent)
+			images, err := downloadPostImages(messageCtx, resourceDownloader, message.MessageID, content.Images)
+			if err != nil {
+				return fmt.Errorf("飞书应用 %s: 下载富文本图片: %w", appName, err)
+			}
 			return handler.Handle(messageCtx, feishuadapter.Message{
 				EventID: eventID,
 				AppID:   appID,
 				UserID:  userID,
 				ChatID:  message.ChatID,
-				Text:    message.Content,
+				Text:    content.Text,
+				Images:  images,
 			})
 		})
 		client.OnError(func(err error) { log.Printf("飞书长连接错误 app=%s: %v", appName, err) })
 		clients = append(clients, client)
 	}
 	return clients, nil
+}
+
+// messageImageDownloader 是“消息资源下载”接口的最小能力。
+// 用户发送的图片必须带 message_id 下载，不能调用仅适用于应用自上传图片的 images 接口。
+type messageImageDownloader interface {
+	DownloadMessageImage(ctx context.Context, messageID, imageKey string) ([]byte, error)
+}
+
+type feishuMessageImageDownloader struct{ client *lark.Client }
+
+// newMessageImageDownloader 为一个飞书应用创建按消息下载资源的客户端。
+func newMessageImageDownloader(appID, appSecret string) *feishuMessageImageDownloader {
+	return &feishuMessageImageDownloader{client: lark.NewClient(appID, appSecret)}
+}
+
+// DownloadMessageImage 通过飞书“获取消息中的资源文件”接口下载用户消息内嵌图片。
+func (d *feishuMessageImageDownloader) DownloadMessageImage(ctx context.Context, messageID, imageKey string) ([]byte, error) {
+	response, err := d.client.Im.V1.MessageResource.Get(ctx, larkim.NewGetMessageResourceReqBuilder().
+		MessageId(messageID).
+		FileKey(imageKey).
+		Type("image").
+		Build())
+	if err != nil {
+		return nil, err
+	}
+	if !response.Success() {
+		return nil, fmt.Errorf("下载消息资源 API 错误: %d - %s", response.Code, response.Msg)
+	}
+	data, err := io.ReadAll(response.File)
+	if err != nil {
+		return nil, fmt.Errorf("读取消息图片流: %w", err)
+	}
+	return data, nil
+}
+
+// downloadPostImages 下载 post 图片并补全目标 Studio 内容块所需的名称和媒体类型。
+// messageID 是图片所属飞书消息 ID；images 来自 ParseInboundContent，返回的 Data 仅存在于当前请求内存中。
+func downloadPostImages(ctx context.Context, downloader messageImageDownloader, messageID string, images []feishuadapter.RichTextImage) ([]model.ImageAttachment, error) {
+	attachments := make([]model.ImageAttachment, 0, len(images))
+	for index, image := range images {
+		data, err := downloader.DownloadMessageImage(ctx, messageID, image.ImageKey)
+		if err != nil {
+			return nil, fmt.Errorf("下载 image_key=%s: %w", image.ImageKey, err)
+		}
+		if len(data) == 0 {
+			return nil, fmt.Errorf("下载 image_key=%s: 图片为空", image.ImageKey)
+		}
+		mediaType := http.DetectContentType(data)
+		extensions, _ := mime.ExtensionsByType(mediaType)
+		extension := ".bin"
+		if len(extensions) > 0 {
+			extension = extensions[0]
+		}
+		name := fmt.Sprintf("feishu-image-%d%s", index+1, extension)
+		attachments = append(attachments, model.ImageAttachment{Name: filepath.Base(name), MediaType: mediaType, Data: data})
+	}
+	return attachments, nil
 }
 
 // logInboundMessage 输出标准化消息和飞书原始事件，供路由字段排查使用。

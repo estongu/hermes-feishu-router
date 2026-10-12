@@ -24,6 +24,7 @@ type Message struct {
 	FeishuUserID string
 	ChatID       string
 	Text         string
+	Images       []model.ImageAttachment
 }
 
 // AccessResolver 按路由中的 username 获取本次请求可用的 Studio 地址与短期令牌。
@@ -34,7 +35,7 @@ type AccessResolver interface {
 // EkkoClient 约束 Hub 对 Ekko Studio 的必要能力。
 // 具体 Socket.IO 协议实现将在对实际部署版本完成兼容性验证后接入。
 type EkkoClient interface {
-	Run(ctx context.Context, target model.EkkoTarget, token, sessionID, text string, onChunk func(string)) (string, error)
+	Run(ctx context.Context, target model.EkkoTarget, token, sessionID, text string, images []model.ImageAttachment, onChunk func(string)) (string, error)
 }
 
 // Service 负责去重、查路由、创建或恢复会话并执行 Ekko 对话。
@@ -108,7 +109,7 @@ func (s *Service) handle(ctx context.Context, message Message, onChunk func(stri
 		return "", err
 	}
 
-	reply, err := s.ekko.Run(ctx, target, access.Token, session.EkkoSessionID, message.Text, onChunk)
+	reply, err := s.ekko.Run(ctx, target, access.Token, session.EkkoSessionID, message.Text, message.Images, onChunk)
 	if err != nil {
 		return "", fmt.Errorf("执行 Ekko 会话: %w", err)
 	}

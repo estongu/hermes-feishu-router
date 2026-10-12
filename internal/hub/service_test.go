@@ -62,7 +62,7 @@ func (fakeAccessResolver) Resolve(context.Context, string) (model.StudioAccess, 
 
 type fakeEkko struct{ ran int }
 
-func (e *fakeEkko) Run(context.Context, model.EkkoTarget, string, string, string, func(string)) (string, error) {
+func (e *fakeEkko) Run(context.Context, model.EkkoTarget, string, string, string, []model.ImageAttachment, func(string)) (string, error) {
 	e.ran++
 	return "Ekko 回复", nil
 }

@@ -1,0 +1,29 @@
+# 此文件仅展示结构；真实值只写入未提交的 config.yaml。
+feishu:
+  # false 时仅发送最终答案；true 时以飞书原生消息流式输出。
+  stream-enabled: true
+  # true 会记录完整入站事件（含消息正文），仅本地排障时开启。
+  debug-log-events: false
+  # 每个机器人一条长连接；同一员工可通过所有机器人路由到同一容器。
+  apps:
+    - name: 主机器人
+      app-id: cli_xxx
+      app-secret: change-me
+    - name: 第二机器人
+      app-id: cli_yyy
+      app-secret: change-me
+
+mysql:
+  path: 127.0.0.1
+  port: "3306"
+  username: router_user
+  password: change-me
+  db-name: test
+  config: charset=utf8mb4&parseTime=True&loc=Local
+  max-idle-conns: 10
+  max-open-conns: 100
+
+platform:
+  base-url: http://platform.example.internal
+  username: your-platform-username
+  password: your-platform-password

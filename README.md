@@ -60,6 +60,8 @@ feishu_user_id ──> feishu_user_route ──> container_id、username
 4. 创建或恢复 `(app_id, user_id, chat_id)` 对应的目标会话。
 5. 通过 Socket.IO `/chat-run` 转发问题，并把回答回发到原会话。
 
+群聊消息会在服务端再次校验：只有飞书事件中明确标识为“@ 当前机器人”的消息才会转发；私聊消息则直接处理。因此即使应用被授予 `im:message.group_msg` 一类的群消息权限，普通群聊也不会触发 Hermes。
+
 用户提问后会立即收到“正在处理”提示。开启流式时，回答以飞书 Card 2.0 的 Markdown 组件持续更新；关闭流式时，最终答案仍以 Card 2.0 发送。
 
 ## Platform：内置容器管理实现

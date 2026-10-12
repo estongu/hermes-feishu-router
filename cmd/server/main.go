@@ -14,12 +14,13 @@ import (
 
 	channel "github.com/larksuite/channel-sdk-go"
 	channeltypes "github.com/larksuite/channel-sdk-go/types"
-	"github.com/your-github-username/hermes-feishu-router/internal/config"
-	"github.com/your-github-username/hermes-feishu-router/internal/ekko"
-	feishuadapter "github.com/your-github-username/hermes-feishu-router/internal/feishu"
-	"github.com/your-github-username/hermes-feishu-router/internal/hub"
-	"github.com/your-github-username/hermes-feishu-router/internal/platform"
-	"github.com/your-github-username/hermes-feishu-router/internal/store"
+
+	"github.com/estongu/hermes-feishu-router/internal/config"
+	"github.com/estongu/hermes-feishu-router/internal/ekko"
+	feishuadapter "github.com/estongu/hermes-feishu-router/internal/feishu"
+	"github.com/estongu/hermes-feishu-router/internal/hub"
+	"github.com/estongu/hermes-feishu-router/internal/platform"
+	"github.com/estongu/hermes-feishu-router/internal/store"
 )
 
 const feishuStreamThrottle = 15 * time.Second
@@ -92,6 +93,11 @@ func newFeishuClients(apps []config.FeishuAppConfig, streamEnabled, debugLogEven
 		client.OnMessage(func(messageCtx context.Context, message *channel.NormalizedMessage) error {
 			if debugLogEvents {
 				logInboundMessage(appID, message)
+			}
+			// 即使应用配置了 im:message.group_msg，群聊也只能在明确 @ 当前机器人时转发。
+			// MentionedBot 由 channel SDK 根据当前应用机器人的身份和 mentions 自动标注。
+			if !feishuadapter.ShouldRouteMessage(message.ChatType, message.MentionedBot) {
+				return nil
 			}
 			userID, err := feishuadapter.ExtractUserID(message.RawEvent)
 			if err != nil {

@@ -8,8 +8,8 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/your-github-username/hermes-feishu-router/internal/model"
-	"github.com/your-github-username/hermes-feishu-router/internal/store"
+	"github.com/estongu/hermes-feishu-router/internal/model"
+	"github.com/estongu/hermes-feishu-router/internal/store"
 )
 
 var (

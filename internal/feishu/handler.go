@@ -8,7 +8,7 @@ import (
 	"log"
 	"strings"
 
-	"github.com/your-github-username/hermes-feishu-router/internal/hub"
+	"github.com/estongu/hermes-feishu-router/internal/hub"
 )
 
 // ConversationService 是飞书适配层所需的最小 Hub 能力，便于隔离 SDK 并进行单测。

@@ -6,8 +6,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/your-github-username/hermes-feishu-router/internal/model"
-	"github.com/your-github-username/hermes-feishu-router/internal/store"
+	"github.com/estongu/hermes-feishu-router/internal/model"
+	"github.com/estongu/hermes-feishu-router/internal/store"
 )
 
 type fakeStore struct {

@@ -1,4 +1,4 @@
-module github.com/your-github-username/hermes-feishu-router
+module github.com/estongu/hermes-feishu-router
 
 go 1.26.0
 

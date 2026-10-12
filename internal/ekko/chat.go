@@ -7,8 +7,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/your-github-username/hermes-feishu-router/internal/model"
 	socketclient "github.com/malcolmston/socketio/client"
+
+	"github.com/estongu/hermes-feishu-router/internal/model"
 )
 
 // ChatClient 通过 Socket.IO 调用 Studio 的 run 事件，并等待最终的 run.completed 或 run.failed 事件。

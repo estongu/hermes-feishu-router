@@ -16,7 +16,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/your-github-username/hermes-feishu-router/internal/model"
+	"github.com/estongu/hermes-feishu-router/internal/model"
 )
 
 var ErrUserNotFound = errors.New("平台中未找到匹配 remark_name 的用户")

@@ -8,8 +8,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/your-github-username/hermes-feishu-router/internal/model"
 	_ "github.com/go-sql-driver/mysql"
+
+	"github.com/estongu/hermes-feishu-router/internal/model"
 )
 
 var ErrNotFound = errors.New("记录不存在")

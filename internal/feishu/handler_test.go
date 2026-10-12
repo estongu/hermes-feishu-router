@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/your-github-username/hermes-feishu-router/internal/hub"
+	"github.com/estongu/hermes-feishu-router/internal/hub"
 )
 
 type fakeService struct {

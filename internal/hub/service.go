@@ -22,6 +22,7 @@ type Message struct {
 	EventID      string
 	AppID        string
 	FeishuUserID string
+	IsExternal   bool
 	ChatID       string
 	Text         string
 	Images       []model.ImageAttachment
@@ -81,8 +82,17 @@ func (s *Service) handle(ctx context.Context, message Message, onChunk func(stri
 	lock.Lock()
 	defer lock.Unlock()
 
-	target, err := s.store.FindTargetByFeishuUserID(ctx, message.FeishuUserID)
+	var target model.EkkoTarget
+	if message.IsExternal {
+		target, err = s.store.FindTargetByExternalOpenID(ctx, message.AppID, message.FeishuUserID)
+	} else {
+		target, err = s.store.FindTargetByFeishuUserID(ctx, message.FeishuUserID)
+	}
 	if errors.Is(err, store.ErrNotFound) {
+		if message.IsExternal {
+			// 外部用户首次出现时仅保存受限长度的提问摘要，供后台管理员人工绑定。
+			_ = s.store.RecordUnmatchedIdentity(ctx, message.AppID, message.FeishuUserID, message.ChatID, message.EventID, message.Text)
+		}
 		return "", ErrRouteNotFound
 	}
 	if err != nil {

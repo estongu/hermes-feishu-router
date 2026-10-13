@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 
+	"github.com/larksuite/channel-sdk-go"
+
 	feishuadapter "github.com/estongu/hermes-feishu-router/internal/feishu"
 )
 
@@ -36,5 +38,18 @@ func TestDownloadPostImages(t *testing.T) {
 	}
 	if images[0].MediaType != "image/png" || images[0].Name != "feishu-image-1.png" {
 		t.Fatalf("attachment = %#v", images[0])
+	}
+}
+
+// TestCurrentBotMentionPlaceholders 验证只提取 SDK 标记为当前机器人的提及，
+// 防止把用户问题中 @ 其他人的内容错误删除。
+func TestCurrentBotMentionPlaceholders(t *testing.T) {
+	got := currentBotMentionPlaceholders([]channel.Mention{
+		{Key: "@_user_1", Name: "一号机器人", IsBot: true},
+		{Key: "@_user_2", Name: "其他机器人"},
+		{Key: "@_user_3", Name: "同事"},
+	})
+	if len(got) != 2 || got[0] != "@_user_1" || got[1] != "@一号机器人" {
+		t.Fatalf("currentBotMentionPlaceholders() = %#v", got)
 	}
 }

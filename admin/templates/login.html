@@ -1,0 +1,74 @@
+{{define "login.html"}}
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>登录 · Hermes Router</title>
+  <style>
+    :root { color-scheme: light; font-family: Inter, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-width: 320px; min-height: 100vh; color: #18233d; background: #eef2f8; }
+    .page { display: grid; grid-template-columns: minmax(360px, 1fr) minmax(420px, .9fr); min-height: 100vh; }
+    .brand { position: relative; overflow: hidden; display: flex; flex-direction: column; justify-content: space-between; padding: clamp(34px, 6vw, 76px); color: #eef6ff; background: radial-gradient(circle at 10% 15%, #3566d7 0, transparent 38%), radial-gradient(circle at 89% 83%, #19a7a0 0, transparent 31%), linear-gradient(140deg, #0b1732, #142d62); }
+    .brand::before, .brand::after { position: absolute; border: 1px solid rgba(172, 208, 255, .16); border-radius: 50%; content: ""; pointer-events: none; }
+    .brand::before { width: 560px; height: 560px; top: -290px; right: -180px; }
+    .brand::after { width: 380px; height: 380px; bottom: -235px; left: -125px; }
+    .logo, .brand-content, .brand-footer { position: relative; z-index: 1; }
+    .logo { display: flex; align-items: center; gap: 11px; font-size: 18px; font-weight: 720; }
+    .logo-mark { display: grid; width: 31px; height: 31px; place-items: center; border-radius: 9px; color: #102858; background: linear-gradient(135deg, #d9ebff, #82c9ff); box-shadow: 0 8px 25px rgba(0, 0, 0, .2); font-size: 16px; }
+    .brand-content { max-width: 500px; margin: 52px 0; }
+    .eyebrow { margin: 0 0 17px; color: #95dce2; font-size: 12px; font-weight: 700; letter-spacing: 1.4px; text-transform: uppercase; }
+    .brand h1 { max-width: 470px; margin: 0; font-size: clamp(34px, 4vw, 54px); line-height: 1.15; letter-spacing: -.045em; }
+    .brand-copy { max-width: 440px; margin: 21px 0 31px; color: #c2d3ef; font-size: 16px; line-height: 1.8; }
+    .features { display: grid; gap: 12px; }
+    .feature { display: flex; align-items: center; gap: 11px; color: #dce9fc; font-size: 14px; }
+    .feature i { display: grid; width: 22px; height: 22px; place-items: center; border: 1px solid rgba(181, 223, 255, .4); border-radius: 50%; color: #9ce5dd; font-style: normal; font-size: 12px; }
+    .brand-footer { color: rgba(216, 231, 255, .64); font-size: 12px; }
+    .login-area { display: grid; place-items: center; padding: 32px; background: #f9fbfe; }
+    .login-card { width: min(100%, 410px); padding: 16px; }
+    .mobile-logo { display: none; }
+    .card-mark { display: grid; width: 44px; height: 44px; place-items: center; margin-bottom: 24px; border-radius: 13px; color: #fff; background: linear-gradient(135deg, #1b55b7, #287fce); box-shadow: 0 10px 26px rgba(29, 91, 181, .26); font-size: 20px; }
+    .login-card h2 { margin: 0; color: #12213e; font-size: 30px; letter-spacing: -.035em; }
+    .subtitle { margin: 10px 0 31px; color: #71809a; font-size: 14px; }
+    .field { display: grid; gap: 8px; margin-bottom: 20px; }
+    label { color: #34425b; font-size: 13px; font-weight: 650; }
+    input { width: 100%; height: 48px; padding: 0 14px; outline: none; border: 1px solid #dbe3ee; border-radius: 10px; color: #17233b; background: #fff; font: inherit; transition: border-color .18s, box-shadow .18s; }
+    input::placeholder { color: #a9b3c2; }
+    input:focus { border-color: #2c71ca; box-shadow: 0 0 0 4px rgba(44, 113, 202, .13); }
+    .error { display: flex; gap: 8px; margin: -7px 0 20px; padding: 11px 12px; border: 1px solid #f5c8c8; border-radius: 9px; color: #aa3434; background: #fff4f4; font-size: 13px; line-height: 1.45; }
+    .error::before { content: "!"; display: grid; flex: 0 0 17px; height: 17px; place-items: center; border-radius: 50%; color: #fff; background: #ce5555; font-size: 11px; font-weight: 800; }
+    button { width: 100%; height: 49px; margin-top: 3px; border: 0; border-radius: 10px; color: #fff; cursor: pointer; background: linear-gradient(135deg, #195ab9, #2679c9); box-shadow: 0 10px 22px rgba(35, 101, 192, .24); font: inherit; font-weight: 650; transition: transform .16s, box-shadow .16s, filter .16s; }
+    button:hover { filter: brightness(1.06); box-shadow: 0 13px 28px rgba(35, 101, 192, .3); transform: translateY(-1px); }
+    button:active { transform: translateY(0); }
+    .security-note { margin: 23px 0 0; color: #8c98a9; font-size: 12px; line-height: 1.6; text-align: center; }
+    .security-note span { color: #418065; font-weight: 700; }
+    @media (max-width: 820px) { .page { grid-template-columns: 1fr; } .brand { display: none; } .login-area { min-height: 100vh; padding: 26px 20px; background: radial-gradient(circle at 0 0, #e0ecff, transparent 40%), #f9fbfe; } .login-card { padding: 20px 4px; } .mobile-logo { display: flex; align-items: center; gap: 9px; margin-bottom: 46px; color: #1d365c; font-size: 16px; font-weight: 740; } .mobile-logo .logo-mark { width: 28px; height: 28px; font-size: 14px; } }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <section class="brand" aria-label="Hermes Router 后台管理">
+      <div class="logo"><span class="logo-mark">◆</span> Hermes Router</div>
+      <div class="brand-content">
+        <p class="eyebrow">Admin Console</p>
+        <h1>让每一次消息，都到达正确的 Hermes。</h1>
+        <p class="brand-copy">集中维护容器、飞书用户路由和外部身份绑定，清晰掌握机器人服务的配置状态。</p>
+        <div class="features"><div class="feature"><i>✓</i> 容器与用户路由集中管理</div><div class="feature"><i>✓</i> 待绑定外部身份快速处理</div><div class="feature"><i>✓</i> 与现有 Router 数据库安全共用</div></div>
+      </div>
+      <div class="brand-footer">Hermes Feishu Router · 管理控制台</div>
+    </section>
+    <section class="login-area">
+      <form class="login-card" method="post">
+        <div class="mobile-logo"><span class="logo-mark">◆</span> Hermes Router</div>
+        <div class="card-mark">◆</div><h2>欢迎回来</h2><p class="subtitle">登录后台管理控制台，继续管理路由配置。</p>
+        {{with .Error}}<div class="error" role="alert">{{.}}</div>{{end}}
+        <div class="field"><label for="username">账号</label><input id="username" name="username" placeholder="请输入管理员账号" autocomplete="username" autofocus required></div>
+        <div class="field"><label for="password">密码</label><input id="password" name="password" type="password" placeholder="请输入密码" autocomplete="current-password" required></div>
+        <button type="submit">安全登录</button><p class="security-note"><span>●</span> 登录状态受到安全 Cookie 保护</p>
+      </form>
+    </section>
+  </main>
+</body>
+</html>
+{{end}}

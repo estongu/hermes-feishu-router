@@ -18,6 +18,8 @@ var ErrNotFound = errors.New("记录不存在")
 // Store 封装 Hub 所需的最小持久化操作，便于业务层进行单元测试。
 type Store interface {
 	FindTargetByFeishuUserID(ctx context.Context, feishuUserID string) (model.EkkoTarget, error)
+	FindTargetByExternalOpenID(ctx context.Context, appID, openID string) (model.EkkoTarget, error)
+	RecordUnmatchedIdentity(ctx context.Context, appID, openID, chatID, messageID, preview string) error
 	FindSession(ctx context.Context, appID, feishuUserID, chatID string) (model.ChatSession, error)
 	SaveSession(ctx context.Context, session model.ChatSession) error
 	MarkEventProcessed(ctx context.Context, appID, eventID string) (bool, error)
@@ -79,6 +81,31 @@ func (s *MySQLStore) Migrate(ctx context.Context) error {
 			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			PRIMARY KEY (app_id, event_id)
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+		`CREATE TABLE IF NOT EXISTS feishu_unmatched_identity (
+			app_id VARCHAR(64) NOT NULL,
+			open_id VARCHAR(128) NOT NULL,
+			chat_id VARCHAR(128) NOT NULL DEFAULT '',
+			first_message_id VARCHAR(128) NOT NULL DEFAULT '',
+			latest_message_id VARCHAR(128) NOT NULL DEFAULT '',
+			latest_message_preview VARCHAR(256) NULL,
+			first_seen_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			last_seen_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+			status VARCHAR(16) NOT NULL DEFAULT 'pending',
+			bound_container_id VARCHAR(64) NULL,
+			bound_at DATETIME NULL,
+			bound_by VARCHAR(64) NULL,
+			PRIMARY KEY (app_id, open_id)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+		`CREATE TABLE IF NOT EXISTS feishu_external_route (
+			app_id VARCHAR(64) NOT NULL,
+			open_id VARCHAR(128) NOT NULL,
+			container_id VARCHAR(64) NOT NULL,
+			username VARCHAR(128) NOT NULL,
+			enabled TINYINT(1) NOT NULL DEFAULT 1,
+			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+			PRIMARY KEY (app_id, open_id),
+			CONSTRAINT fk_external_route_container FOREIGN KEY (container_id) REFERENCES ekko_container(container_id)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 	}
 	for _, statement := range statements {
 		if _, err := s.db.ExecContext(ctx, statement); err != nil {
@@ -89,6 +116,38 @@ func (s *MySQLStore) Migrate(ctx context.Context) error {
 		return err
 	}
 	return nil
+}
+
+// FindTargetByExternalOpenID 返回绑定到当前机器人应用的外部用户路由。
+func (s *MySQLStore) FindTargetByExternalOpenID(ctx context.Context, appID, openID string) (model.EkkoTarget, error) {
+	const query = `SELECT c.container_id, r.username, c.profile, c.enabled FROM feishu_external_route r JOIN ekko_container c ON c.container_id = r.container_id WHERE r.app_id = ? AND r.open_id = ? AND r.enabled = 1 AND c.enabled = 1`
+	var target model.EkkoTarget
+	if err := s.db.QueryRowContext(ctx, query, appID, openID).Scan(&target.ContainerID, &target.Username, &target.Profile, &target.Enabled); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return model.EkkoTarget{}, ErrNotFound
+		}
+		return model.EkkoTarget{}, fmt.Errorf("查询外部用户路由: %w", err)
+	}
+	return target, nil
+}
+
+// RecordUnmatchedIdentity 幂等记录外部用户的待配置身份；消息摘要不会保存完整正文。
+func (s *MySQLStore) RecordUnmatchedIdentity(ctx context.Context, appID, openID, chatID, messageID, preview string) error {
+	runes := []rune(preview)
+	preview = string(runes[:min(len(runes), 200)])
+	const query = `INSERT INTO feishu_unmatched_identity (app_id, open_id, chat_id, first_message_id, latest_message_id, latest_message_preview) VALUES (?, ?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE chat_id=VALUES(chat_id), latest_message_id=VALUES(latest_message_id), latest_message_preview=VALUES(latest_message_preview), last_seen_at=CURRENT_TIMESTAMP`
+	_, err := s.db.ExecContext(ctx, query, appID, openID, chatID, messageID, messageID, string(preview))
+	if err != nil {
+		return fmt.Errorf("记录待配置外部身份: %w", err)
+	}
+	return nil
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 // migrateLegacyIdentityColumns 将旧版 open_id 表结构平滑升级为 user_id。

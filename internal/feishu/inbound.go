@@ -82,6 +82,18 @@ func ParseInboundContent(normalContent string, rawEvent any) RichText {
 	return result
 }
 
+// RemoveMentionPlaceholders 移除转发给 Hermes 时无业务含义的飞书提及占位符。
+// text 是已经解析的消息正文；placeholders 仅应传入当前机器人的 mention key 或展示名称，
+// 以保留用户在问题中 @ 其他成员的语义。
+func RemoveMentionPlaceholders(text string, placeholders []string) string {
+	for _, placeholder := range placeholders {
+		if placeholder != "" {
+			text = strings.ReplaceAll(text, placeholder, "")
+		}
+	}
+	return strings.TrimSpace(text)
+}
+
 type postNode struct {
 	Tag      string `json:"tag"`
 	Text     string `json:"text"`

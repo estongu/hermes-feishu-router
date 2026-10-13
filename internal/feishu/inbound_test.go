@@ -30,3 +30,11 @@ func TestParseInboundContentImage(t *testing.T) {
 		t.Fatalf("ParseInboundContent() = %#v", got)
 	}
 }
+
+// TestRemoveMentionPlaceholders 验证仅清理传入的机器人提及标记，保留其余正文。
+func TestRemoveMentionPlaceholders(t *testing.T) {
+	got := RemoveMentionPlaceholders("@_user_1 天气，顺便问 @同事 是否下雨", []string{"@_user_1"})
+	if got != "天气，顺便问 @同事 是否下雨" {
+		t.Fatalf("RemoveMentionPlaceholders() = %q", got)
+	}
+}

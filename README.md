@@ -160,3 +160,7 @@ go run ./cmd/server
 - 不订阅未处理的 `im.message.message_read_v1` 已读事件，避免无害的 `not found handler` 日志。
 
 使用 `Ctrl+C` 或 `SIGTERM` 可关闭长连接并退出。
+
+## 独立后台管理
+
+`admin/` 是独立启动的后台管理服务，使用单独登录配置并与 Router 共用 MySQL。它可维护容器、内部用户路由，以及外部成员的 `app_id + open_id` 路由；详见 [admin/README.md](admin/README.md)。

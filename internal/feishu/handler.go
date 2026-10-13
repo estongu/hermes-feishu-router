@@ -42,12 +42,13 @@ type Stream interface {
 
 // Message 是飞书 SDK 归一化后的路由字段。UserID 从原始事件 sender_id.user_id 提取。
 type Message struct {
-	EventID string
-	AppID   string
-	UserID  string
-	ChatID  string
-	Text    string
-	Images  []model.ImageAttachment
+	EventID    string
+	AppID      string
+	UserID     string
+	IsExternal bool
+	ChatID     string
+	Text       string
+	Images     []model.ImageAttachment
 }
 
 // Handler 处理飞书文本消息，并把 Hub 的最终文本回复发回原聊天。
@@ -76,6 +77,7 @@ func (h *Handler) Handle(ctx context.Context, message Message) error {
 		EventID:      message.EventID,
 		AppID:        message.AppID,
 		FeishuUserID: message.UserID,
+		IsExternal:   message.IsExternal,
 		ChatID:       message.ChatID,
 		Text:         message.Text,
 		Images:       message.Images,

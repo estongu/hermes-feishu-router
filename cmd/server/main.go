@@ -107,7 +107,7 @@ func newFeishuClients(apps []config.FeishuAppConfig, streamEnabled, debugLogEven
 			if !feishuadapter.ShouldRouteMessage(message.ChatType, message.MentionedBot) {
 				return nil
 			}
-			userID, err := feishuadapter.ExtractUserID(message.RawEvent)
+			identity, err := feishuadapter.ExtractSenderIdentity(message.RawEvent)
 			if err != nil {
 				return fmt.Errorf("飞书应用 %s: %w", appName, err)
 			}
@@ -116,23 +116,45 @@ func newFeishuClients(apps []config.FeishuAppConfig, streamEnabled, debugLogEven
 				eventID = message.MessageID
 			}
 			content := feishuadapter.ParseInboundContent(message.Content, message.RawEvent)
+			// 飞书将 @ 当前机器人的文本编码为 @_user_N 之类的占位符。
+			// 该标记只用于事件路由，转发给 Hermes 前必须移除，避免干扰真实提问。
+			content.Text = feishuadapter.RemoveMentionPlaceholders(content.Text, currentBotMentionPlaceholders(message.Mentions))
 			images, err := downloadPostImages(messageCtx, resourceDownloader, message.MessageID, content.Images)
 			if err != nil {
 				return fmt.Errorf("飞书应用 %s: 下载富文本图片: %w", appName, err)
 			}
 			return handler.Handle(messageCtx, feishuadapter.Message{
-				EventID: eventID,
-				AppID:   appID,
-				UserID:  userID,
-				ChatID:  message.ChatID,
-				Text:    content.Text,
-				Images:  images,
+				EventID:    eventID,
+				AppID:      appID,
+				UserID:     identity.Value,
+				IsExternal: identity.IsExternal,
+				ChatID:     message.ChatID,
+				Text:       content.Text,
+				Images:     images,
 			})
 		})
 		client.OnError(func(err error) { log.Printf("飞书长连接错误 app=%s: %v", appName, err) })
 		clients = append(clients, client)
 	}
 	return clients, nil
+}
+
+// currentBotMentionPlaceholders 从 SDK 已标记的当前机器人提及中提取可清除的文本形式。
+// mentions 中其他人员或其他机器人的提及不会被加入，避免改变用户问题的原意。
+func currentBotMentionPlaceholders(mentions []channel.Mention) []string {
+	placeholders := make([]string, 0, len(mentions)*2)
+	for _, mention := range mentions {
+		if !mention.IsBot {
+			continue
+		}
+		if mention.Key != "" {
+			placeholders = append(placeholders, mention.Key)
+		}
+		if mention.Name != "" {
+			placeholders = append(placeholders, "@"+mention.Name)
+		}
+	}
+	return placeholders
 }
 
 // messageImageDownloader 是“消息资源下载”接口的最小能力。

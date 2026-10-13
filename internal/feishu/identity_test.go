@@ -3,7 +3,7 @@ package feishu
 import "testing"
 
 // TestExtractUserID 验证多飞书应用路由从原始事件读取跨应用稳定的 user_id。
-func TestExtractUserID(t *testing.T) {
+func TestExtractSenderIdentityUsesInternalUserID(t *testing.T) {
 	rawEvent := map[string]any{
 		"event": map[string]any{
 			"sender": map[string]any{
@@ -11,16 +11,16 @@ func TestExtractUserID(t *testing.T) {
 			},
 		},
 	}
-	userID, err := ExtractUserID(rawEvent)
-	if err != nil || userID != "u_global" {
-		t.Fatalf("ExtractUserID() = %q, %v", userID, err)
+	identity, err := ExtractSenderIdentity(rawEvent)
+	if err != nil || identity.Value != "u_global" || identity.IsExternal {
+		t.Fatalf("ExtractSenderIdentity() = %#v, %v", identity, err)
 	}
 }
 
-// TestExtractUserIDMissing 验证未获 user_id 时不给错误地回退到 open_id。
-func TestExtractUserIDMissing(t *testing.T) {
-	_, err := ExtractUserID(map[string]any{"event": map[string]any{"sender": map[string]any{"sender_id": map[string]any{"open_id": "ou_app_scoped"}}}})
-	if err == nil {
-		t.Fatal("ExtractUserID() should reject an event without user_id")
+// TestExtractSenderIdentityUsesExternalOpenID 验证外部用户缺少 user_id 时使用应用范围内的 open_id。
+func TestExtractSenderIdentityUsesExternalOpenID(t *testing.T) {
+	identity, err := ExtractSenderIdentity(map[string]any{"event": map[string]any{"sender": map[string]any{"sender_id": map[string]any{"open_id": "ou_app_scoped"}}}})
+	if err != nil || identity.Value != "ou_app_scoped" || !identity.IsExternal {
+		t.Fatalf("ExtractSenderIdentity() = %#v, %v", identity, err)
 	}
 }

@@ -1,0 +1,9 @@
+# 后台服务独立配置。router-config 指向现有 Router 配置，仅复用其中的 MySQL 连接信息。
+listen: ":8081"
+router-config: ../config.yaml
+auth:
+  username: admin
+  # 使用 go run ./cmd/password-hash -password '请替换' 生成 bcrypt 哈希。
+  password-hash: "$2a$12$replace-with-a-real-bcrypt-hash"
+  # 至少 32 字节的随机字符串；不要提交真实值。
+  session-secret: change-this-to-a-long-random-secret

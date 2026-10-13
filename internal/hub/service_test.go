@@ -25,6 +25,15 @@ func (s *fakeStore) FindTargetByFeishuUserID(context.Context, string) (model.Ekk
 	}
 	return s.target, nil
 }
+func (s *fakeStore) FindTargetByExternalOpenID(context.Context, string, string) (model.EkkoTarget, error) {
+	if s.target.ContainerID == "" {
+		return model.EkkoTarget{}, store.ErrNotFound
+	}
+	return s.target, nil
+}
+func (s *fakeStore) RecordUnmatchedIdentity(context.Context, string, string, string, string, string) error {
+	return nil
+}
 func (s *fakeStore) FindSession(context.Context, string, string, string) (model.ChatSession, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -100,6 +109,19 @@ func TestHandleRouteNotFound(t *testing.T) {
 	_, err := NewService(&fakeStore{}, fakeAccessResolver{}, &fakeEkko{}).Handle(context.Background(), Message{EventID: "event-1", AppID: "cli-bot", FeishuUserID: "ou_user", ChatID: "oc-chat"})
 	if !errors.Is(err, ErrRouteNotFound) {
 		t.Fatalf("Handle() error = %v, want ErrRouteNotFound", err)
+	}
+}
+
+// TestHandleExternalIdentity 验证外部成员以当前应用范围内的 open_id 建立独立会话。
+func TestHandleExternalIdentity(t *testing.T) {
+	db := &fakeStore{target: model.EkkoTarget{ContainerID: "hermes-external", Username: "external-user"}}
+	ekko := &fakeEkko{}
+	_, err := NewService(db, fakeAccessResolver{}, ekko).Handle(context.Background(), Message{EventID: "event-external", AppID: "cli-gateway", FeishuUserID: "ou_external", IsExternal: true, ChatID: "oc-shared", Text: "你好"})
+	if err != nil {
+		t.Fatalf("Handle() error = %v", err)
+	}
+	if db.saved.FeishuUserID != "ou_external" || db.saved.AppID != "cli-gateway" || ekko.ran != 1 {
+		t.Fatalf("external session = %#v, run=%d", db.saved, ekko.ran)
 	}
 }
 

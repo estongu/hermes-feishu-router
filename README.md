@@ -1,8 +1,17 @@
 # Hermes Feishu Router
 
-一个 Go 服务：将飞书机器人消息自动路由到不同员工专属的 Hermes 容器，再将回答回传至原飞书会话。
+一个飞书消息路由器，服务每位成员独立的 AI 工作空间。
 
-项目最初服务于 Ekko Studio，但并不绑定 Ekko：只要目标容器兼容当前 `/chat-run` Socket.IO 对话协议，就可以作为目标。Ekko Studio 是一种 Hermes 容器部署形态。
+Hermes Feishu Router 会按消息发送者，将飞书机器人消息路由至对应员工专属的 Hermes 容器，并将回答回传到原私聊或群聊。成员不必知道容器地址或令牌；即使在同一个群里，彼此的 Agent、会话上下文和权限也保持隔离。
+
+> 项目最初服务于 Ekko Studio，但不绑定 Ekko。任何兼容 `/chat-run` Socket.IO 对话协议的容器都可作为目标；Ekko Studio 只是 Hermes 容器的一种部署形态。
+
+## 解决的问题
+
+- **共享入口不串上下文**：团队只需维护一个或少量飞书机器人，不必为每位员工单独创建机器人。
+- **群聊按提问者路由**：成员在同一群内 @ 机器人时，问题会进入其自己的 Hermes，而不是共用一个 Agent。
+- **不暴露运行环境**：员工无需接触容器端口、地址或访问令牌。
+- **管理员可控**：通过独立后台维护容器、内部成员路由和外部成员身份绑定，无需重启 Router。
 
 ## 适用场景
 
@@ -10,6 +19,27 @@
 - 员工拥有独立 Hermes 容器或 Agent 运行环境；
 - 需要隔离不同员工、群聊和机器人之间的对话上下文；
 - 不希望员工接触容器端口和令牌。
+
+## 后台管理
+
+`admin/` 是一个独立启动的轻量后台，与 Router 共用 MySQL，但不与 Router 进程耦合。管理员可以：
+
+- 查看容器、内部用户路由、外部用户路由及待绑定身份数量；
+- 管理内部员工 `user_id → Hermes 容器` 映射；
+- 发现首次发消息的外部成员，确认后按 `app_id + open_id` 绑定专属 Hermes；
+- 启用或停用路由，下一条消息立即生效。
+
+下面图片使用脱敏演示数据，界面与内置后台模板一致。
+
+### 运行总览与待绑定身份
+
+![Hermes Router Admin 运行总览](docs/images/admin-dashboard.svg)
+
+### 外部成员路由绑定
+
+![Hermes Router Admin 外部用户路由](docs/images/admin-external-routes.svg)
+
+后台的安装、登录和安全要求见 [admin/README.md](admin/README.md)。
 
 ## 架构
 

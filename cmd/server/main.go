@@ -102,9 +102,9 @@ func newFeishuClients(apps []config.FeishuAppConfig, streamEnabled, debugLogEven
 			if debugLogEvents {
 				logInboundMessage(appID, message)
 			}
-			// 即使应用配置了 im:message.group_msg，群聊也只能在明确 @ 当前机器人时转发。
-			// MentionedBot 由 channel SDK 根据当前应用机器人的身份和 mentions 自动标注。
-			if !feishuadapter.ShouldRouteMessage(message.ChatType, message.MentionedBot) {
+			// 即使应用配置了 im:message.group_msg，群聊也只能在明确 @ 当前机器人、且未 @所有人时转发。
+			// MentionedBot 与 MentionAll 由 channel SDK 根据飞书事件自动标注。
+			if !feishuadapter.ShouldRouteMessage(message.ChatType, message.MentionedBot, message.MentionAll) {
 				return nil
 			}
 			identity, err := feishuadapter.ExtractSenderIdentity(message.RawEvent)

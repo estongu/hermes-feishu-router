@@ -22,7 +22,7 @@ Hermes Feishu Router 会按消息发送者，将飞书机器人消息路由至�
 
 ## 后台管理
 
-`admin/` 是一个独立启动的轻量后台，与 Router 共用 MySQL，但不与 Router 进程耦合。管理员可以：
+`admin/` 是一个独立启动的轻量后台，与 Router 共用同一数据库，但不与 Router 进程耦合。管理员可以：
 
 - 查看容器、内部用户路由、外部用户路由及待绑定身份数量；
 - 管理内部员工 `user_id → Hermes 容器` 映射；
@@ -43,13 +43,21 @@ Hermes Feishu Router 会按消息发送者，将飞书机器人消息路由至�
 
 ## Docker Compose 一键部署
 
-Compose 会启动 MySQL、消息 Router 与后台管理；首次启动时自动创建 Router 所需的表。Hermes Platform 与飞书应用是外部依赖，请先准备好对应的地址和凭据。
+默认 Compose 使用 SQLite，共享给消息 Router 与后台管理；首次启动时自动创建 Router 所需的表。Hermes Platform 与飞书应用是外部依赖，请先准备好对应的地址和凭据。
 
 ```bash
 cp .env.example .env
 # 编辑 .env：至少替换所有 change-me 值，并填写飞书和 Platform 配置。
 docker compose up -d --build
 ```
+
+SQLite 适合单台服务器上的一个 Router 与一个后台管理服务，数据库文件保存在 Compose 数据卷中。多实例、跨机器或高可用部署请改用 MySQL：
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.mysql.yml up -d --build
+```
+
+MySQL 覆盖方案会额外读取 `.env` 中的 `MYSQL_PASSWORD` 与 `MYSQL_ROOT_PASSWORD`。
 
 启动成功后，后台默认位于 `http://127.0.0.1:8081`。`.env.example` 中的演示后台密码是 `change-me-now`，仅供首次验证；生产环境必须替换 `ADMIN_PASSWORD_HASH` 与 `ADMIN_SESSION_SECRET`。可通过下面命令生成新哈希：
 
@@ -64,7 +72,7 @@ docker compose run --rm --no-deps --entrypoint /app/password-hash admin -passwor
 ```bash
 docker compose logs -f router
 docker compose logs -f admin
-docker compose down              # 停止服务，保留 MySQL 数据卷
+docker compose down              # 停止服务，保留 SQLite 数据卷
 ```
 
 ## 架构
@@ -80,7 +88,7 @@ docker compose down              # 停止服务，保留 MySQL 数据卷
                │
      ┌─────────┴─────────┐
      ▼                   ▼
- MySQL                容器发现与鉴权提供者
+ SQLite / MySQL       容器发现与鉴权提供者
  用户路由、会话、去重       ├─ 内置：Platform
                            └─ 可替换：静态配置 / CMDB / 自有 API
                                       │
@@ -111,7 +119,7 @@ feishu_user_id ──> feishu_user_route ──> container_id、username
 ## 消息流程
 
 1. 从飞书事件原始数据读取 `sender_id.user_id`、`chat_id` 与文本。
-2. 查询 MySQL 路由，得到 `container_id` 与容器定位用的 `username`。
+2. 查询路由数据库，得到 `container_id` 与容器定位用的 `username`。
 3. 容器发现与鉴权提供者解析目标地址和短期令牌。
 4. 创建或恢复 `(app_id, user_id, chat_id)` 对应的目标会话。
 5. 通过 Socket.IO `/chat-run` 转发问题，并把回答回发到原会话。
@@ -168,13 +176,9 @@ feishu:
       app-id: cli_xxx
       app-secret: change-me
 
-mysql:
-  path: 127.0.0.1
-  port: "3306"
-  username: root
-  password: change-me
-  db-name: hermes_router
-  config: charset=utf8mb4&parseTime=True&loc=Local
+storage:
+  driver: sqlite
+  sqlite-path: /data/hermes-router.db
 
 # 使用内置 Platform 解析器时需要配置。
 platform:
@@ -219,4 +223,4 @@ go run ./cmd/server
 
 ## 独立后台管理
 
-`admin/` 是独立启动的后台管理服务，使用单独登录配置并与 Router 共用 MySQL。它可维护容器、内部用户路由，以及外部成员的 `app_id + open_id` 路由；详见 [admin/README.md](admin/README.md)。
+`admin/` 是独立启动的后台管理服务，使用单独登录配置并与 Router 共用同一数据库。它可维护容器、内部用户路由，以及外部成员的 `app_id + open_id` 路由；详见 [admin/README.md](admin/README.md)。

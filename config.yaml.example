@@ -13,15 +13,17 @@ feishu:
       app-id: cli_yyy
       app-secret: change-me
 
-mysql:
-  path: 127.0.0.1
-  port: "3306"
-  username: router_user
-  password: change-me
-  db-name: test
-  config: charset=utf8mb4&parseTime=True&loc=Local
-  max-idle-conns: 10
-  max-open-conns: 100
+storage:
+  # 默认单机 SQLite；多实例或跨机器部署时可改为 mysql，并填写 mysql 配置。
+  driver: sqlite
+  sqlite-path: /data/hermes-router.db
+  mysql:
+    path: 127.0.0.1
+    port: "3306"
+    username: router_user
+    password: change-me
+    db-name: hermes_router
+    config: charset=utf8mb4&parseTime=True&loc=Local
 
 platform:
   base-url: http://platform.example.internal

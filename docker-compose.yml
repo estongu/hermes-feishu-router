@@ -1,21 +1,4 @@
 services:
-  mysql:
-    image: mysql:8.4
-    restart: unless-stopped
-    environment:
-      MYSQL_DATABASE: ${MYSQL_DATABASE:-hermes_router}
-      MYSQL_USER: ${MYSQL_USER:-hermes_router}
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?请在 .env 中设置 MYSQL_PASSWORD}
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?请在 .env 中设置 MYSQL_ROOT_PASSWORD}
-    volumes:
-      - mysql-data:/var/lib/mysql
-    healthcheck:
-      test: ["CMD-SHELL", "mysqladmin ping -h localhost -uroot -p$$MYSQL_ROOT_PASSWORD --silent"]
-      interval: 5s
-      timeout: 5s
-      retries: 20
-      start_period: 15s
-
   router:
     build:
       context: .
@@ -23,11 +6,8 @@ services:
       target: router
     restart: unless-stopped
     environment: &router-environment
-      MYSQL_HOST: mysql
-      MYSQL_PORT: 3306
-      MYSQL_DATABASE: ${MYSQL_DATABASE:-hermes_router}
-      MYSQL_USER: ${MYSQL_USER:-hermes_router}
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?请在 .env 中设置 MYSQL_PASSWORD}
+      STORAGE_DRIVER: sqlite
+      SQLITE_PATH: /data/hermes-router.db
       FEISHU_APP_NAME: ${FEISHU_APP_NAME:-主机器人}
       FEISHU_APP_ID: ${FEISHU_APP_ID:?请在 .env 中设置 FEISHU_APP_ID}
       FEISHU_APP_SECRET: ${FEISHU_APP_SECRET:?请在 .env 中设置 FEISHU_APP_SECRET}
@@ -36,9 +16,8 @@ services:
       PLATFORM_BASE_URL: ${PLATFORM_BASE_URL:?请在 .env 中设置 PLATFORM_BASE_URL}
       PLATFORM_USERNAME: ${PLATFORM_USERNAME:?请在 .env 中设置 PLATFORM_USERNAME}
       PLATFORM_PASSWORD: ${PLATFORM_PASSWORD:?请在 .env 中设置 PLATFORM_PASSWORD}
-    depends_on:
-      mysql:
-        condition: service_healthy
+    volumes:
+      - router-data:/data
 
   admin:
     build:
@@ -47,16 +26,14 @@ services:
       target: admin
     restart: unless-stopped
     ports:
-      # 默认仅允许本机访问；如需公网访问，请由反向代理提供 HTTPS 与访问控制。
       - "127.0.0.1:${ADMIN_PORT:-8081}:8081"
     environment:
       <<: *router-environment
       ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
       ADMIN_PASSWORD_HASH: ${ADMIN_PASSWORD_HASH:?请在 .env 中设置 ADMIN_PASSWORD_HASH}
       ADMIN_SESSION_SECRET: ${ADMIN_SESSION_SECRET:?请在 .env 中设置 ADMIN_SESSION_SECRET}
-    depends_on:
-      mysql:
-        condition: service_healthy
+    volumes:
+      - router-data:/data
 
 volumes:
-  mysql-data:
+  router-data:

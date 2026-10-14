@@ -23,7 +23,7 @@ RUN apk add --no-cache ca-certificates gettext \
 WORKDIR /app
 COPY --from=router-builder /out/hermes-feishu-router /app/hermes-feishu-router
 COPY deploy/router-config.yaml.tmpl deploy/router-entrypoint.sh /app/
-RUN chmod +x /app/router-entrypoint.sh && chown -R hermes:hermes /app
+RUN mkdir /data && chmod +x /app/router-entrypoint.sh && chown -R hermes:hermes /app /data
 USER hermes
 ENTRYPOINT ["/app/router-entrypoint.sh"]
 
@@ -35,6 +35,6 @@ WORKDIR /app
 COPY --from=admin-builder /out/hermes-router-admin /app/hermes-router-admin
 COPY --from=admin-builder /out/password-hash /app/password-hash
 COPY deploy/router-config.yaml.tmpl deploy/admin-config.yaml.tmpl deploy/admin-entrypoint.sh /app/
-RUN chmod +x /app/admin-entrypoint.sh && chown -R hermes:hermes /app
+RUN mkdir /data && chmod +x /app/admin-entrypoint.sh && chown -R hermes:hermes /app /data
 USER hermes
 ENTRYPOINT ["/app/admin-entrypoint.sh"]

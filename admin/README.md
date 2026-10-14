@@ -1,6 +1,6 @@
 # Hermes Router Admin
 
-这是独立运行的后台管理服务，与消息 Router 分属不同进程，仅共享 MySQL。
+这是独立运行的后台管理服务，与消息 Router 分属不同进程，仅共享同一数据库（默认 SQLite，也支持 MySQL）。
 
 ## 启动
 

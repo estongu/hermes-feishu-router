@@ -11,10 +11,46 @@ import (
 
 // Config 是启动 Hub 所需的完整运行配置，统一来自 config.yaml。
 type Config struct {
-	Feishu   FeishuConfig   `yaml:"feishu"`
+	Feishu  FeishuConfig  `yaml:"feishu"`
+	Storage StorageConfig `yaml:"storage"`
+	// MySQL 保留用于兼容旧版配置；新部署请使用 storage。
 	MySQL    MySQLConfig    `yaml:"mysql"`
 	Platform PlatformConfig `yaml:"platform"`
 }
+
+// StorageConfig 描述 Router 使用的持久化存储。SQLite 适合单机部署；MySQL 用于多实例部署。
+type StorageConfig struct {
+	Driver     string      `yaml:"driver"`
+	SQLitePath string      `yaml:"sqlite-path"`
+	MySQL      MySQLConfig `yaml:"mysql"`
+}
+
+// DriverAndDSN 返回 database/sql 所需驱动和 DSN；未配置 storage 时兼容旧 MySQL 配置。
+func (c StorageConfig) DriverAndDSN(legacy MySQLConfig) (string, string, error) {
+	driver := strings.ToLower(strings.TrimSpace(c.Driver))
+	if driver == "" {
+		if legacy.Path == "" {
+			return "", "", fmt.Errorf("storage.driver 不能为空")
+		}
+		return "mysql", legacy.DSN(), nil
+	}
+	switch driver {
+	case "sqlite":
+		path := strings.TrimSpace(c.SQLitePath)
+		if path == "" {
+			return "", "", fmt.Errorf("storage.sqlite-path 不能为空")
+		}
+		return "sqlite", fmt.Sprintf("file:%s?_journal_mode=WAL&_busy_timeout=5000&_foreign_keys=on", path), nil
+	case "mysql":
+		if c.MySQL.Path == "" || c.MySQL.Port == "" || c.MySQL.Username == "" || c.MySQL.Password == "" || c.MySQL.DBName == "" {
+			return "", "", fmt.Errorf("storage.mysql 的必填字段不能为空")
+		}
+		return "mysql", c.MySQL.DSN(), nil
+	default:
+		return "", "", fmt.Errorf("不支持的 storage.driver: %s", c.Driver)
+	}
+}
+
 type FeishuConfig struct {
 	Apps           []FeishuAppConfig `yaml:"apps"`
 	StreamEnabled  *bool             `yaml:"stream-enabled"`
@@ -106,8 +142,11 @@ func LoadFile(path string) (Config, error) {
 		return Config{}, err
 	}
 	cfg.Feishu.Apps = apps
-	if cfg.MySQL.Path == "" || cfg.MySQL.Port == "" || cfg.MySQL.Username == "" || cfg.MySQL.Password == "" || cfg.MySQL.DBName == "" || cfg.Platform.BaseURL == "" || cfg.Platform.Username == "" || cfg.Platform.Password == "" {
-		return Config{}, fmt.Errorf("config.yaml 中 mysql 和 platform 的必填字段不能为空")
+	if _, _, err := cfg.Storage.DriverAndDSN(cfg.MySQL); err != nil || cfg.Platform.BaseURL == "" || cfg.Platform.Username == "" || cfg.Platform.Password == "" {
+		if err != nil {
+			return Config{}, err
+		}
+		return Config{}, fmt.Errorf("config.yaml 中 platform 的必填字段不能为空")
 	}
 	return cfg, nil
 }

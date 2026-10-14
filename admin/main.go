@@ -19,6 +19,7 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 	"golang.org/x/crypto/bcrypt"
 	"gopkg.in/yaml.v3"
+	_ "modernc.org/sqlite"
 )
 
 //go:embed templates/*.html
@@ -34,35 +35,37 @@ type config struct {
 	} `yaml:"auth"`
 }
 
-type routerConfig struct {
-	MySQL struct {
-		Path, Port, Username, Password, DBName, Config string `yaml:"-"`
-	} `yaml:"mysql"`
-}
-
 type app struct {
 	db        *sql.DB
+	driver    string
 	cfg       config
 	templates *template.Template
 }
 
 // loadConfig 加载后台认证配置以及 Router 的数据库连接配置，避免重复存放数据库密码。
-func loadConfig(path string) (config, string, error) {
+func loadConfig(path string) (config, string, string, error) {
 	var cfg config
 	b, err := os.ReadFile(path)
 	if err != nil {
-		return cfg, "", err
+		return cfg, "", "", err
 	}
 	if err := yaml.Unmarshal(b, &cfg); err != nil {
-		return cfg, "", err
+		return cfg, "", "", err
 	}
 	if cfg.Listen == "" {
 		cfg.Listen = ":8081"
 	}
 	if cfg.RouterConfig == "" || cfg.Auth.Username == "" || cfg.Auth.PasswordHash == "" || len(cfg.Auth.SessionSecret) < 32 {
-		return cfg, "", errors.New("后台配置缺少 router-config、认证账号、密码哈希或至少 32 字节 session-secret")
+		return cfg, "", "", errors.New("后台配置缺少 router-config、认证账号、密码哈希或至少 32 字节 session-secret")
 	}
 	var raw struct {
+		Storage struct {
+			Driver     string `yaml:"driver"`
+			SQLitePath string `yaml:"sqlite-path"`
+			MySQL      struct {
+				Path, Port, Username, Password, DBName, Config string `yaml:"-"`
+			} `yaml:"mysql"`
+		} `yaml:"storage"`
 		MySQL struct {
 			Path     string `yaml:"path"`
 			Port     string `yaml:"port"`
@@ -74,15 +77,29 @@ func loadConfig(path string) (config, string, error) {
 	}
 	rb, err := os.ReadFile(cfg.RouterConfig)
 	if err != nil {
-		return cfg, "", err
+		return cfg, "", "", err
 	}
 	if err := yaml.Unmarshal(rb, &raw); err != nil {
-		return cfg, "", err
+		return cfg, "", "", err
+	}
+	if raw.Storage.Driver == "sqlite" {
+		if raw.Storage.SQLitePath == "" {
+			return cfg, "", "", errors.New("Router 配置的 storage.sqlite-path 不能为空")
+		}
+		return cfg, "sqlite", fmt.Sprintf("file:%s?_journal_mode=WAL&_busy_timeout=5000&_foreign_keys=on", raw.Storage.SQLitePath), nil
+	}
+	if raw.Storage.Driver == "mysql" {
+		raw.MySQL.Path = raw.Storage.MySQL.Path
+		raw.MySQL.Port = raw.Storage.MySQL.Port
+		raw.MySQL.Username = raw.Storage.MySQL.Username
+		raw.MySQL.Password = raw.Storage.MySQL.Password
+		raw.MySQL.DBName = raw.Storage.MySQL.DBName
+		raw.MySQL.Config = raw.Storage.MySQL.Config
 	}
 	if raw.MySQL.Path == "" || raw.MySQL.Port == "" || raw.MySQL.Username == "" || raw.MySQL.DBName == "" {
-		return cfg, "", errors.New("Router 配置的 MySQL 字段不完整")
+		return cfg, "", "", errors.New("Router 配置的 MySQL 字段不完整")
 	}
-	return cfg, fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?%s", raw.MySQL.Username, raw.MySQL.Password, raw.MySQL.Path, raw.MySQL.Port, raw.MySQL.DBName, raw.MySQL.Config), nil
+	return cfg, "mysql", fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?%s", raw.MySQL.Username, raw.MySQL.Password, raw.MySQL.Path, raw.MySQL.Port, raw.MySQL.DBName, raw.MySQL.Config), nil
 }
 
 func main() {
@@ -90,11 +107,11 @@ func main() {
 	if len(os.Args) > 1 {
 		path = os.Args[1]
 	}
-	cfg, dsn, err := loadConfig(path)
+	cfg, driver, dsn, err := loadConfig(path)
 	if err != nil {
 		log.Fatal(err)
 	}
-	db, err := sql.Open("mysql", dsn)
+	db, err := sql.Open(driver, dsn)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -102,7 +119,11 @@ func main() {
 	if err := db.Ping(); err != nil {
 		log.Fatal(err)
 	}
-	a := &app{db: db, cfg: cfg, templates: template.Must(template.ParseFS(templateFiles, "templates/*.html"))}
+	if driver == "sqlite" {
+		db.SetMaxOpenConns(1)
+		db.SetMaxIdleConns(1)
+	}
+	a := &app{db: db, driver: driver, cfg: cfg, templates: template.Must(template.ParseFS(templateFiles, "templates/*.html"))}
 	if err := a.migrate(); err != nil {
 		log.Fatal(err)
 	}
@@ -123,6 +144,9 @@ func main() {
 
 // migrate 创建后台专用的外部身份待配置与绑定表，不影响 Router 既有表。
 func (a *app) migrate() error {
+	if a.driver == "sqlite" {
+		return a.migrateSQLite()
+	}
 	for _, q := range []string{
 		`CREATE TABLE IF NOT EXISTS feishu_unmatched_identity (app_id VARCHAR(64) NOT NULL, open_id VARCHAR(128) NOT NULL, union_id VARCHAR(128) NOT NULL DEFAULT '', sender_tenant_key VARCHAR(128) NOT NULL DEFAULT '', chat_id VARCHAR(128) NOT NULL DEFAULT '', first_message_id VARCHAR(128) NOT NULL DEFAULT '', latest_message_id VARCHAR(128) NOT NULL DEFAULT '', latest_message_preview VARCHAR(256) NULL, first_seen_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, last_seen_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, status VARCHAR(16) NOT NULL DEFAULT 'pending', bound_container_id VARCHAR(64) NULL, bound_at DATETIME NULL, bound_by VARCHAR(64) NULL, PRIMARY KEY (app_id, open_id)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 		`CREATE TABLE IF NOT EXISTS feishu_external_route (app_id VARCHAR(64) NOT NULL, open_id VARCHAR(128) NOT NULL, container_id VARCHAR(64) NOT NULL, username VARCHAR(128) NOT NULL, enabled TINYINT(1) NOT NULL DEFAULT 1, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, PRIMARY KEY (app_id, open_id), CONSTRAINT fk_external_route_container FOREIGN KEY (container_id) REFERENCES ekko_container(container_id)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
@@ -132,6 +156,50 @@ func (a *app) migrate() error {
 		}
 	}
 	return nil
+}
+
+// migrateSQLite 使后台可在 Router 首次启动前独立创建其管理所需的表。
+func (a *app) migrateSQLite() error {
+	for _, q := range []string{
+		`CREATE TABLE IF NOT EXISTS feishu_unmatched_identity (app_id TEXT NOT NULL, open_id TEXT NOT NULL, union_id TEXT NOT NULL DEFAULT '', sender_tenant_key TEXT NOT NULL DEFAULT '', chat_id TEXT NOT NULL DEFAULT '', first_message_id TEXT NOT NULL DEFAULT '', latest_message_id TEXT NOT NULL DEFAULT '', latest_message_preview TEXT, first_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, last_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, status TEXT NOT NULL DEFAULT 'pending', bound_container_id TEXT, bound_at TEXT, bound_by TEXT, PRIMARY KEY (app_id, open_id))`,
+		`CREATE TABLE IF NOT EXISTS feishu_external_route (app_id TEXT NOT NULL, open_id TEXT NOT NULL, container_id TEXT NOT NULL, username TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (app_id, open_id), FOREIGN KEY (container_id) REFERENCES ekko_container(container_id))`,
+	} {
+		if _, err := a.db.Exec(q); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// upsert 返回当前数据库方言对应的 UPSERT 语句，避免管理操作依赖 MySQL 专有语法。
+func (a *app) upsert(kind string) string {
+	if a.driver == "sqlite" {
+		switch kind {
+		case "container":
+			return `INSERT INTO ekko_container (container_id,profile,enabled) VALUES (?,?,?) ON CONFLICT(container_id) DO UPDATE SET profile=excluded.profile,enabled=excluded.enabled,updated_at=CURRENT_TIMESTAMP`
+		case "ensure-container":
+			return `INSERT INTO ekko_container (container_id,profile,enabled) VALUES (?, 'default', 1) ON CONFLICT(container_id) DO NOTHING`
+		case "route":
+			return `INSERT INTO feishu_user_route (feishu_user_id,container_id,username,enabled) VALUES (?,?,?,?) ON CONFLICT(feishu_user_id) DO UPDATE SET container_id=excluded.container_id,username=excluded.username,enabled=excluded.enabled,updated_at=CURRENT_TIMESTAMP`
+		case "external":
+			return `INSERT INTO feishu_external_route (app_id,open_id,container_id,username,enabled) VALUES (?,?,?,?,?) ON CONFLICT(app_id,open_id) DO UPDATE SET container_id=excluded.container_id,username=excluded.username,enabled=excluded.enabled,updated_at=CURRENT_TIMESTAMP`
+		case "external-enabled":
+			return `INSERT INTO feishu_external_route (app_id,open_id,container_id,username,enabled) VALUES (?,?,?,?,1) ON CONFLICT(app_id,open_id) DO UPDATE SET container_id=excluded.container_id,username=excluded.username,enabled=1,updated_at=CURRENT_TIMESTAMP`
+		}
+	}
+	switch kind {
+	case "container":
+		return `INSERT INTO ekko_container (container_id,profile,enabled) VALUES (?,?,?) ON DUPLICATE KEY UPDATE profile=VALUES(profile),enabled=VALUES(enabled)`
+	case "ensure-container":
+		return `INSERT INTO ekko_container (container_id,profile,enabled) VALUES (?, 'default', 1) ON DUPLICATE KEY UPDATE container_id=container_id`
+	case "route":
+		return `INSERT INTO feishu_user_route (feishu_user_id,container_id,username,enabled) VALUES (?,?,?,?) ON DUPLICATE KEY UPDATE container_id=VALUES(container_id),username=VALUES(username),enabled=VALUES(enabled)`
+	case "external":
+		return `INSERT INTO feishu_external_route (app_id,open_id,container_id,username,enabled) VALUES (?,?,?,?,?) ON DUPLICATE KEY UPDATE container_id=VALUES(container_id),username=VALUES(username),enabled=VALUES(enabled)`
+	case "external-enabled":
+		return `INSERT INTO feishu_external_route (app_id,open_id,container_id,username,enabled) VALUES (?,?,?,?,1) ON DUPLICATE KEY UPDATE container_id=VALUES(container_id),username=VALUES(username),enabled=1`
+	}
+	return ""
 }
 
 func secureHeaders(next http.Handler) http.Handler {
@@ -310,7 +378,7 @@ func (a *app) saveContainer(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "container_id 不能为空", 400)
 		return
 	}
-	_, err := a.db.Exec(`INSERT INTO ekko_container (container_id,profile,enabled) VALUES (?,?,?) ON DUPLICATE KEY UPDATE profile=VALUES(profile),enabled=VALUES(enabled)`, id, strings.TrimSpace(r.FormValue("profile")), r.FormValue("enabled") == "1")
+	_, err := a.db.Exec(a.upsert("container"), id, strings.TrimSpace(r.FormValue("profile")), r.FormValue("enabled") == "1")
 	if err != nil {
 		http.Error(w, err.Error(), 400)
 		return
@@ -330,10 +398,10 @@ func (a *app) saveRoute(w http.ResponseWriter, r *http.Request) {
 	}
 	tx, err := a.db.Begin()
 	if err == nil {
-		err = ensureContainer(tx, container)
+		err = a.ensureContainer(tx, container)
 	}
 	if err == nil {
-		_, err = tx.Exec(`INSERT INTO feishu_user_route (feishu_user_id,container_id,username,enabled) VALUES (?,?,?,?) ON DUPLICATE KEY UPDATE container_id=VALUES(container_id),username=VALUES(username),enabled=VALUES(enabled)`, id, container, username, r.FormValue("enabled") == "1")
+		_, err = tx.Exec(a.upsert("route"), id, container, username, r.FormValue("enabled") == "1")
 	}
 	if err == nil {
 		err = tx.Commit()
@@ -349,8 +417,8 @@ func (a *app) saveRoute(w http.ResponseWriter, r *http.Request) {
 
 // ensureContainer 在保存路由前确保其目标容器存在。
 // containerID 是表单提交的容器 ID；找不到时会创建启用状态、profile 为 default 的基础容器。
-func ensureContainer(tx *sql.Tx, containerID string) error {
-	_, err := tx.Exec(`INSERT INTO ekko_container (container_id,profile,enabled) VALUES (?, 'default', 1) ON DUPLICATE KEY UPDATE container_id=container_id`, containerID)
+func (a *app) ensureContainer(tx *sql.Tx, containerID string) error {
+	_, err := tx.Exec(a.upsert("ensure-container"), containerID)
 	return err
 }
 
@@ -368,10 +436,10 @@ func (a *app) saveExternalRoute(w http.ResponseWriter, r *http.Request) {
 	}
 	tx, err := a.db.Begin()
 	if err == nil {
-		err = ensureContainer(tx, container)
+		err = a.ensureContainer(tx, container)
 	}
 	if err == nil {
-		_, err = tx.Exec(`INSERT INTO feishu_external_route (app_id,open_id,container_id,username,enabled) VALUES (?,?,?,?,?) ON DUPLICATE KEY UPDATE container_id=VALUES(container_id),username=VALUES(username),enabled=VALUES(enabled)`, appID, openID, container, username, r.FormValue("enabled") == "1")
+		_, err = tx.Exec(a.upsert("external"), appID, openID, container, username, r.FormValue("enabled") == "1")
 	}
 	if err == nil {
 		// 外部路由保存成功即代表管理员已完成确认；更新不到记录时同样视为成功。
@@ -401,10 +469,10 @@ func (a *app) bindExternal(w http.ResponseWriter, r *http.Request) {
 	}
 	tx, err := a.db.Begin()
 	if err == nil {
-		err = ensureContainer(tx, container)
+		err = a.ensureContainer(tx, container)
 	}
 	if err == nil {
-		_, err = tx.Exec(`INSERT INTO feishu_external_route (app_id,open_id,container_id,username,enabled) VALUES (?,?,?,?,1) ON DUPLICATE KEY UPDATE container_id=VALUES(container_id),username=VALUES(username),enabled=1`, appID, openID, container, username)
+		_, err = tx.Exec(a.upsert("external-enabled"), appID, openID, container, username)
 	}
 	if err == nil {
 		_, err = tx.Exec(`UPDATE feishu_unmatched_identity SET status='bound',bound_container_id=?,bound_at=?,bound_by=? WHERE app_id=? AND open_id=?`, container, time.Now(), a.cfg.Auth.Username, appID, openID)

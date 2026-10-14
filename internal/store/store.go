@@ -1,4 +1,4 @@
-// Package store 提供 MySQL 中的员工路由、会话映射与事件去重能力。
+// Package store 提供 SQLite/MySQL 中的员工路由、会话映射与事件去重能力。
 package store
 
 import (
@@ -9,6 +9,7 @@ import (
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
+	_ "modernc.org/sqlite"
 
 	"github.com/estongu/hermes-feishu-router/internal/model"
 )
@@ -25,23 +26,34 @@ type Store interface {
 	MarkEventProcessed(ctx context.Context, appID, eventID string) (bool, error)
 }
 
-// MySQLStore 是 Store 的 MySQL 实现。
-type MySQLStore struct{ db *sql.DB }
+// MySQLStore 是 Store 的 SQL 实现；名称为兼容已有调用保留，driver 可为 mysql 或 sqlite。
+type MySQLStore struct {
+	db     *sql.DB
+	driver string
+}
 
-// Open 建立 MySQL 连接。输入为 DSN，输出为已通过 Ping 校验的存储对象。
-func Open(ctx context.Context, dsn string) (*MySQLStore, error) {
-	db, err := sql.Open("mysql", dsn)
+// Open 建立 MySQL 或 SQLite 连接。SQLite 单机部署限制连接数，降低写锁竞争。
+func Open(ctx context.Context, driver, dsn string) (*MySQLStore, error) {
+	if driver != "mysql" && driver != "sqlite" {
+		return nil, fmt.Errorf("不支持的数据库驱动: %s", driver)
+	}
+	db, err := sql.Open(driver, dsn)
 	if err != nil {
 		return nil, fmt.Errorf("打开 MySQL 连接: %w", err)
 	}
-	db.SetMaxIdleConns(10)
-	db.SetMaxOpenConns(100)
-	db.SetConnMaxLifetime(time.Hour)
+	if driver == "sqlite" {
+		db.SetMaxIdleConns(1)
+		db.SetMaxOpenConns(1)
+	} else {
+		db.SetMaxIdleConns(10)
+		db.SetMaxOpenConns(100)
+		db.SetConnMaxLifetime(time.Hour)
+	}
 	if err := db.PingContext(ctx); err != nil {
 		db.Close()
-		return nil, fmt.Errorf("连接 MySQL: %w", err)
+		return nil, fmt.Errorf("连接 %s: %w", driver, err)
 	}
-	return &MySQLStore{db: db}, nil
+	return &MySQLStore{db: db, driver: driver}, nil
 }
 
 // Close 关闭数据库连接池。
@@ -49,6 +61,9 @@ func (s *MySQLStore) Close() error { return s.db.Close() }
 
 // Migrate 创建或升级 Hub 所需数据表；操作可重复执行且不会删除现有数据。
 func (s *MySQLStore) Migrate(ctx context.Context) error {
+	if s.driver == "sqlite" {
+		return s.migrateSQLite(ctx)
+	}
 	statements := []string{
 		`CREATE TABLE IF NOT EXISTS ekko_container (
 			container_id VARCHAR(64) PRIMARY KEY,
@@ -118,6 +133,24 @@ func (s *MySQLStore) Migrate(ctx context.Context) error {
 	return nil
 }
 
+// migrateSQLite 创建 SQLite 表。时间字段由写入语句维护，避免依赖 MySQL 的 ON UPDATE 扩展。
+func (s *MySQLStore) migrateSQLite(ctx context.Context) error {
+	statements := []string{
+		`CREATE TABLE IF NOT EXISTS ekko_container (container_id TEXT PRIMARY KEY, profile TEXT NOT NULL DEFAULT 'default', enabled INTEGER NOT NULL DEFAULT 1, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP)`,
+		`CREATE TABLE IF NOT EXISTS feishu_user_route (feishu_user_id TEXT PRIMARY KEY, container_id TEXT NOT NULL, username TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (container_id) REFERENCES ekko_container(container_id))`,
+		`CREATE TABLE IF NOT EXISTS feishu_ekko_session (app_id TEXT NOT NULL, feishu_user_id TEXT NOT NULL, chat_id TEXT NOT NULL, container_id TEXT NOT NULL, ekko_session_id TEXT NOT NULL, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (app_id, feishu_user_id, chat_id), FOREIGN KEY (container_id) REFERENCES ekko_container(container_id))`,
+		`CREATE TABLE IF NOT EXISTS feishu_event_dedup (app_id TEXT NOT NULL, event_id TEXT NOT NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (app_id, event_id))`,
+		`CREATE TABLE IF NOT EXISTS feishu_unmatched_identity (app_id TEXT NOT NULL, open_id TEXT NOT NULL, chat_id TEXT NOT NULL DEFAULT '', first_message_id TEXT NOT NULL DEFAULT '', latest_message_id TEXT NOT NULL DEFAULT '', latest_message_preview TEXT, first_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, last_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, status TEXT NOT NULL DEFAULT 'pending', bound_container_id TEXT, bound_at TEXT, bound_by TEXT, PRIMARY KEY (app_id, open_id))`,
+		`CREATE TABLE IF NOT EXISTS feishu_external_route (app_id TEXT NOT NULL, open_id TEXT NOT NULL, container_id TEXT NOT NULL, username TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (app_id, open_id), FOREIGN KEY (container_id) REFERENCES ekko_container(container_id))`,
+	}
+	for _, statement := range statements {
+		if _, err := s.db.ExecContext(ctx, statement); err != nil {
+			return fmt.Errorf("执行 SQLite 迁移: %w", err)
+		}
+	}
+	return nil
+}
+
 // FindTargetByExternalOpenID 返回绑定到当前机器人应用的外部用户路由。
 func (s *MySQLStore) FindTargetByExternalOpenID(ctx context.Context, appID, openID string) (model.EkkoTarget, error) {
 	const query = `SELECT c.container_id, r.username, c.profile, c.enabled FROM feishu_external_route r JOIN ekko_container c ON c.container_id = r.container_id WHERE r.app_id = ? AND r.open_id = ? AND r.enabled = 1 AND c.enabled = 1`
@@ -135,7 +168,10 @@ func (s *MySQLStore) FindTargetByExternalOpenID(ctx context.Context, appID, open
 func (s *MySQLStore) RecordUnmatchedIdentity(ctx context.Context, appID, openID, chatID, messageID, preview string) error {
 	runes := []rune(preview)
 	preview = string(runes[:min(len(runes), 200)])
-	const query = `INSERT INTO feishu_unmatched_identity (app_id, open_id, chat_id, first_message_id, latest_message_id, latest_message_preview) VALUES (?, ?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE chat_id=VALUES(chat_id), latest_message_id=VALUES(latest_message_id), latest_message_preview=VALUES(latest_message_preview), last_seen_at=CURRENT_TIMESTAMP`
+	query := `INSERT INTO feishu_unmatched_identity (app_id, open_id, chat_id, first_message_id, latest_message_id, latest_message_preview) VALUES (?, ?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE chat_id=VALUES(chat_id), latest_message_id=VALUES(latest_message_id), latest_message_preview=VALUES(latest_message_preview), last_seen_at=CURRENT_TIMESTAMP`
+	if s.driver == "sqlite" {
+		query = `INSERT INTO feishu_unmatched_identity (app_id, open_id, chat_id, first_message_id, latest_message_id, latest_message_preview) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(app_id, open_id) DO UPDATE SET chat_id=excluded.chat_id, latest_message_id=excluded.latest_message_id, latest_message_preview=excluded.latest_message_preview, last_seen_at=CURRENT_TIMESTAMP`
+	}
 	_, err := s.db.ExecContext(ctx, query, appID, openID, chatID, messageID, messageID, string(preview))
 	if err != nil {
 		return fmt.Errorf("记录待配置外部身份: %w", err)
@@ -153,6 +189,9 @@ func min(a, b int) int {
 // migrateLegacyIdentityColumns 将旧版 open_id 表结构平滑升级为 user_id。
 // 历史 open_id 的值无法推导为 user_id，保留它们仅避免数据丢失；管理员应按 README 更新路由。
 func (s *MySQLStore) migrateLegacyIdentityColumns(ctx context.Context) error {
+	if s.driver == "sqlite" {
+		return nil
+	}
 	if exists, err := s.columnExists(ctx, "feishu_user_route", "open_id"); err != nil {
 		return err
 	} else if exists {
@@ -226,8 +265,11 @@ func (s *MySQLStore) FindSession(ctx context.Context, appID, feishuUserID, chatI
 
 // SaveSession 新建或更新飞书到 Ekko 的会话映射。
 func (s *MySQLStore) SaveSession(ctx context.Context, session model.ChatSession) error {
-	const query = `INSERT INTO feishu_ekko_session (app_id, feishu_user_id, chat_id, container_id, ekko_session_id) VALUES (?, ?, ?, ?, ?)
+	query := `INSERT INTO feishu_ekko_session (app_id, feishu_user_id, chat_id, container_id, ekko_session_id) VALUES (?, ?, ?, ?, ?)
 		ON DUPLICATE KEY UPDATE container_id = VALUES(container_id), ekko_session_id = VALUES(ekko_session_id), updated_at = CURRENT_TIMESTAMP`
+	if s.driver == "sqlite" {
+		query = `INSERT INTO feishu_ekko_session (app_id, feishu_user_id, chat_id, container_id, ekko_session_id) VALUES (?, ?, ?, ?, ?) ON CONFLICT(app_id, feishu_user_id, chat_id) DO UPDATE SET container_id=excluded.container_id, ekko_session_id=excluded.ekko_session_id, updated_at=CURRENT_TIMESTAMP`
+	}
 	_, err := s.db.ExecContext(ctx, query, session.AppID, session.FeishuUserID, session.ChatID, session.ContainerID, session.EkkoSessionID)
 	if err != nil {
 		return fmt.Errorf("保存飞书会话: %w", err)
@@ -237,7 +279,11 @@ func (s *MySQLStore) SaveSession(ctx context.Context, session model.ChatSession)
 
 // MarkEventProcessed 原子记录飞书事件；返回 true 表示本次首次处理。
 func (s *MySQLStore) MarkEventProcessed(ctx context.Context, appID, eventID string) (bool, error) {
-	result, err := s.db.ExecContext(ctx, `INSERT IGNORE INTO feishu_event_dedup (app_id, event_id) VALUES (?, ?)`, appID, eventID)
+	query := `INSERT IGNORE INTO feishu_event_dedup (app_id, event_id) VALUES (?, ?)`
+	if s.driver == "sqlite" {
+		query = `INSERT OR IGNORE INTO feishu_event_dedup (app_id, event_id) VALUES (?, ?)`
+	}
+	result, err := s.db.ExecContext(ctx, query, appID, eventID)
 	if err != nil {
 		return false, fmt.Errorf("记录飞书事件: %w", err)
 	}

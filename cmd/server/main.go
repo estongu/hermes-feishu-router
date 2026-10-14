@@ -39,7 +39,11 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	database, err := store.Open(ctx, cfg.MySQL.DSN())
+	driver, dsn, err := cfg.Storage.DriverAndDSN(cfg.MySQL)
+	if err != nil {
+		log.Fatal(err)
+	}
+	database, err := store.Open(ctx, driver, dsn)
 	if err != nil {
 		log.Fatal(err)
 	}

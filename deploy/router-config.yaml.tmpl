@@ -7,15 +7,16 @@ feishu:
       app-id: "${FEISHU_APP_ID}"
       app-secret: "${FEISHU_APP_SECRET}"
 
-mysql:
-  path: "${MYSQL_HOST}"
-  port: "${MYSQL_PORT}"
-  username: "${MYSQL_USER}"
-  password: "${MYSQL_PASSWORD}"
-  db-name: "${MYSQL_DATABASE}"
-  config: "charset=utf8mb4&parseTime=True&loc=Local"
-  max-idle-conns: 10
-  max-open-conns: 100
+storage:
+  driver: "${STORAGE_DRIVER}"
+  sqlite-path: "${SQLITE_PATH}"
+  mysql:
+    path: "${MYSQL_HOST}"
+    port: "${MYSQL_PORT}"
+    username: "${MYSQL_USER}"
+    password: "${MYSQL_PASSWORD}"
+    db-name: "${MYSQL_DATABASE}"
+    config: "charset=utf8mb4&parseTime=True&loc=Local"
 
 platform:
   base-url: "${PLATFORM_BASE_URL}"

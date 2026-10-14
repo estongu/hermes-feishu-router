@@ -1,0 +1,7 @@
+.git
+.env
+config.yaml
+admin/config.yaml
+coverage.out
+bin
+docs

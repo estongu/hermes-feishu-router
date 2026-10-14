@@ -1,0 +1,23 @@
+# 此文件由入口脚本从环境变量生成，勿在容器内手工保存真实凭据。
+feishu:
+  stream-enabled: ${FEISHU_STREAM_ENABLED}
+  debug-log-events: ${FEISHU_DEBUG_LOG_EVENTS}
+  apps:
+    - name: "${FEISHU_APP_NAME}"
+      app-id: "${FEISHU_APP_ID}"
+      app-secret: "${FEISHU_APP_SECRET}"
+
+mysql:
+  path: "${MYSQL_HOST}"
+  port: "${MYSQL_PORT}"
+  username: "${MYSQL_USER}"
+  password: "${MYSQL_PASSWORD}"
+  db-name: "${MYSQL_DATABASE}"
+  config: "charset=utf8mb4&parseTime=True&loc=Local"
+  max-idle-conns: 10
+  max-open-conns: 100
+
+platform:
+  base-url: "${PLATFORM_BASE_URL}"
+  username: "${PLATFORM_USERNAME}"
+  password: "${PLATFORM_PASSWORD}"

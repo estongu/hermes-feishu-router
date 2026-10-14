@@ -41,6 +41,32 @@ Hermes Feishu Router 会按消息发送者，将飞书机器人消息路由至�
 
 后台的安装、登录和安全要求见 [admin/README.md](admin/README.md)。
 
+## Docker Compose 一键部署
+
+Compose 会启动 MySQL、消息 Router 与后台管理；首次启动时自动创建 Router 所需的表。Hermes Platform 与飞书应用是外部依赖，请先准备好对应的地址和凭据。
+
+```bash
+cp .env.example .env
+# 编辑 .env：至少替换所有 change-me 值，并填写飞书和 Platform 配置。
+docker compose up -d --build
+```
+
+启动成功后，后台默认位于 `http://127.0.0.1:8081`。`.env.example` 中的演示后台密码是 `change-me-now`，仅供首次验证；生产环境必须替换 `ADMIN_PASSWORD_HASH` 与 `ADMIN_SESSION_SECRET`。可通过下面命令生成新哈希：
+
+```bash
+docker compose run --rm --no-deps --entrypoint /app/password-hash admin -password '你的强密码'
+```
+
+将输出的 bcrypt 哈希填回 `.env` 的 `ADMIN_PASSWORD_HASH`，然后重启后台：`docker compose up -d admin`。
+
+常用运维命令：
+
+```bash
+docker compose logs -f router
+docker compose logs -f admin
+docker compose down              # 停止服务，保留 MySQL 数据卷
+```
+
 ## 架构
 
 ```text

@@ -1,0 +1,7 @@
+# 后台仅复用 router-config 中的数据库连接信息，不重复写入数据库凭据。
+listen: ":8081"
+router-config: /app/router-config.yaml
+auth:
+  username: "${ADMIN_USERNAME}"
+  password-hash: "${ADMIN_PASSWORD_HASH}"
+  session-secret: "${ADMIN_SESSION_SECRET}"

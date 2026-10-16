@@ -34,7 +34,7 @@ RUN apk add --no-cache ca-certificates gettext \
 WORKDIR /app
 COPY --from=admin-builder /out/hermes-router-admin /app/hermes-router-admin
 COPY --from=admin-builder /out/password-hash /app/password-hash
-COPY deploy/router-config.yaml.tmpl deploy/admin-config.yaml.tmpl deploy/admin-entrypoint.sh /app/
+COPY deploy/admin-storage.yaml.tmpl deploy/admin-config.yaml.tmpl deploy/admin-entrypoint.sh /app/
 RUN mkdir /data && chmod +x /app/admin-entrypoint.sh && chown -R hermes:hermes /app /data
 USER hermes
 ENTRYPOINT ["/app/admin-entrypoint.sh"]

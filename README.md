@@ -47,7 +47,26 @@ Hermes Feishu Router 会按消息发送者，将飞书机器人消息路由至�
 
 ```bash
 cp .env.example .env
-# 编辑 .env：至少替换所有 change-me 值，并填写飞书和 Platform 配置。
+```
+
+在首次执行 `docker compose up` 之前，先生成后台登录凭据：
+
+```bash
+# 分别复制两行输出。
+(cd admin && go run ./cmd/password-hash -password '你的强密码')
+openssl rand -base64 48
+```
+
+编辑 `.env`，填写飞书、Platform 和数据库配置，并将上述输出分别写入：
+
+```dotenv
+ADMIN_PASSWORD_HASH='第一条命令输出的完整 bcrypt 哈希'
+ADMIN_SESSION_SECRET='第二条命令输出的随机字符串'
+```
+
+完成所有配置后再构建并启动：
+
+```bash
 docker compose up -d --build
 ```
 
@@ -59,13 +78,7 @@ docker compose -f docker-compose.yml -f docker-compose.mysql.yml up -d --build
 
 MySQL 覆盖方案会额外读取 `.env` 中的 `MYSQL_PASSWORD` 与 `MYSQL_ROOT_PASSWORD`。
 
-启动成功后，后台默认位于 `http://127.0.0.1:8081`。`.env.example` 中的演示后台密码是 `change-me-now`，仅供首次验证；生产环境必须替换 `ADMIN_PASSWORD_HASH` 与 `ADMIN_SESSION_SECRET`。可通过下面命令生成新哈希：
-
-```bash
-docker compose run --rm --no-deps --entrypoint /app/password-hash admin -password '你的强密码'
-```
-
-将输出的 bcrypt 哈希填回 `.env` 的 `ADMIN_PASSWORD_HASH`，然后重启后台：`docker compose up -d admin`。
+启动成功后，后台默认位于 `http://127.0.0.1:8081`。`.env.example` 不提供可用的后台凭据；若缺少 `ADMIN_PASSWORD_HASH` 或 `ADMIN_SESSION_SECRET`，Compose 会拒绝启动。
 
 常用运维命令：
 

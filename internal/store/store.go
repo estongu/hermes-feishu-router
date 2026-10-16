@@ -39,7 +39,7 @@ func Open(ctx context.Context, driver, dsn string) (*MySQLStore, error) {
 	}
 	db, err := sql.Open(driver, dsn)
 	if err != nil {
-		return nil, fmt.Errorf("打开 MySQL 连接: %w", err)
+		return nil, fmt.Errorf("打开 %s 连接: %w", driver, err)
 	}
 	if driver == "sqlite" {
 		db.SetMaxIdleConns(1)

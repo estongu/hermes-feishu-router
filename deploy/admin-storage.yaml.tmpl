@@ -1,0 +1,11 @@
+# 后台仅需数据库连接信息，避免写入飞书和 Platform 凭据。
+storage:
+  driver: "${STORAGE_DRIVER}"
+  sqlite-path: "${SQLITE_PATH}"
+  mysql:
+    path: "${MYSQL_HOST}"
+    port: "${MYSQL_PORT}"
+    username: "${MYSQL_USER}"
+    password: "${MYSQL_PASSWORD}"
+    db-name: "${MYSQL_DATABASE}"
+    config: "charset=utf8mb4&parseTime=True&loc=Local"

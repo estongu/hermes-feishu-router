@@ -1,3 +1,7 @@
+x-storage-environment: &storage-environment
+  STORAGE_DRIVER: sqlite
+  SQLITE_PATH: /data/hermes-router.db
+
 services:
   router:
     build:
@@ -5,9 +9,8 @@ services:
       dockerfile: deploy/Dockerfile
       target: router
     restart: unless-stopped
-    environment: &router-environment
-      STORAGE_DRIVER: sqlite
-      SQLITE_PATH: /data/hermes-router.db
+    environment:
+      <<: *storage-environment
       FEISHU_APP_NAME: ${FEISHU_APP_NAME:-主机器人}
       FEISHU_APP_ID: ${FEISHU_APP_ID:?请在 .env 中设置 FEISHU_APP_ID}
       FEISHU_APP_SECRET: ${FEISHU_APP_SECRET:?请在 .env 中设置 FEISHU_APP_SECRET}
@@ -28,7 +31,7 @@ services:
     ports:
       - "127.0.0.1:${ADMIN_PORT:-8081}:8081"
     environment:
-      <<: *router-environment
+      <<: *storage-environment
       ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
       ADMIN_PASSWORD_HASH: ${ADMIN_PASSWORD_HASH:?请在 .env 中设置 ADMIN_PASSWORD_HASH}
       ADMIN_SESSION_SECRET: ${ADMIN_SESSION_SECRET:?请在 .env 中设置 ADMIN_SESSION_SECRET}

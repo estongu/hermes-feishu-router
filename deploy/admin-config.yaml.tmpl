@@ -1,6 +1,6 @@
-# 后台仅复用 router-config 中的数据库连接信息，不重复写入数据库凭据。
+# 后台仅复用数据库连接配置，不接收 Router 的业务凭据。
 listen: ":8081"
-router-config: /app/router-config.yaml
+router-config: /app/storage-config.yaml
 auth:
   username: "${ADMIN_USERNAME}"
   password-hash: "${ADMIN_PASSWORD_HASH}"

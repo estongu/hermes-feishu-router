@@ -63,17 +63,14 @@ func loadConfig(path string) (config, string, string, error) {
 			Driver     string `yaml:"driver"`
 			SQLitePath string `yaml:"sqlite-path"`
 			MySQL      struct {
-				Path, Port, Username, Password, DBName, Config string `yaml:"-"`
+				Path     string `yaml:"path"`
+				Port     string `yaml:"port"`
+				Username string `yaml:"username"`
+				Password string `yaml:"password"`
+				DBName   string `yaml:"db-name"`
+				Config   string `yaml:"config"`
 			} `yaml:"mysql"`
 		} `yaml:"storage"`
-		MySQL struct {
-			Path     string `yaml:"path"`
-			Port     string `yaml:"port"`
-			Username string `yaml:"username"`
-			Password string `yaml:"password"`
-			DBName   string `yaml:"db-name"`
-			Config   string `yaml:"config"`
-		} `yaml:"mysql"`
 	}
 	rb, err := os.ReadFile(cfg.RouterConfig)
 	if err != nil {
@@ -82,24 +79,20 @@ func loadConfig(path string) (config, string, string, error) {
 	if err := yaml.Unmarshal(rb, &raw); err != nil {
 		return cfg, "", "", err
 	}
-	if raw.Storage.Driver == "sqlite" {
+	driver := strings.ToLower(strings.TrimSpace(raw.Storage.Driver))
+	if driver == "sqlite" {
 		if raw.Storage.SQLitePath == "" {
 			return cfg, "", "", errors.New("Router 配置的 storage.sqlite-path 不能为空")
 		}
 		return cfg, "sqlite", fmt.Sprintf("file:%s?_journal_mode=WAL&_busy_timeout=5000&_foreign_keys=on", raw.Storage.SQLitePath), nil
 	}
-	if raw.Storage.Driver == "mysql" {
-		raw.MySQL.Path = raw.Storage.MySQL.Path
-		raw.MySQL.Port = raw.Storage.MySQL.Port
-		raw.MySQL.Username = raw.Storage.MySQL.Username
-		raw.MySQL.Password = raw.Storage.MySQL.Password
-		raw.MySQL.DBName = raw.Storage.MySQL.DBName
-		raw.MySQL.Config = raw.Storage.MySQL.Config
+	if driver != "mysql" {
+		return cfg, "", "", fmt.Errorf("不支持的 storage.driver: %s", raw.Storage.Driver)
 	}
-	if raw.MySQL.Path == "" || raw.MySQL.Port == "" || raw.MySQL.Username == "" || raw.MySQL.DBName == "" {
+	if raw.Storage.MySQL.Path == "" || raw.Storage.MySQL.Port == "" || raw.Storage.MySQL.Username == "" || raw.Storage.MySQL.Password == "" || raw.Storage.MySQL.DBName == "" {
 		return cfg, "", "", errors.New("Router 配置的 MySQL 字段不完整")
 	}
-	return cfg, "mysql", fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?%s", raw.MySQL.Username, raw.MySQL.Password, raw.MySQL.Path, raw.MySQL.Port, raw.MySQL.DBName, raw.MySQL.Config), nil
+	return cfg, "mysql", fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?%s", raw.Storage.MySQL.Username, raw.Storage.MySQL.Password, raw.Storage.MySQL.Path, raw.Storage.MySQL.Port, raw.Storage.MySQL.DBName, raw.Storage.MySQL.Config), nil
 }
 
 func main() {
@@ -142,13 +135,17 @@ func main() {
 	log.Fatal(http.ListenAndServe(cfg.Listen, secureHeaders(mux)))
 }
 
-// migrate 创建后台专用的外部身份待配置与绑定表，不影响 Router 既有表。
+// migrate 创建后台和 Router 共用的最终表结构，确保空库中任一服务先启动都可正常工作。
 func (a *app) migrate() error {
 	if a.driver == "sqlite" {
 		return a.migrateSQLite()
 	}
 	for _, q := range []string{
-		`CREATE TABLE IF NOT EXISTS feishu_unmatched_identity (app_id VARCHAR(64) NOT NULL, open_id VARCHAR(128) NOT NULL, union_id VARCHAR(128) NOT NULL DEFAULT '', sender_tenant_key VARCHAR(128) NOT NULL DEFAULT '', chat_id VARCHAR(128) NOT NULL DEFAULT '', first_message_id VARCHAR(128) NOT NULL DEFAULT '', latest_message_id VARCHAR(128) NOT NULL DEFAULT '', latest_message_preview VARCHAR(256) NULL, first_seen_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, last_seen_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, status VARCHAR(16) NOT NULL DEFAULT 'pending', bound_container_id VARCHAR(64) NULL, bound_at DATETIME NULL, bound_by VARCHAR(64) NULL, PRIMARY KEY (app_id, open_id)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+		`CREATE TABLE IF NOT EXISTS ekko_container (container_id VARCHAR(64) PRIMARY KEY, profile VARCHAR(64) NOT NULL DEFAULT 'default', enabled TINYINT(1) NOT NULL DEFAULT 1, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+		`CREATE TABLE IF NOT EXISTS feishu_user_route (feishu_user_id VARCHAR(128) PRIMARY KEY, container_id VARCHAR(64) NOT NULL, username VARCHAR(128) NOT NULL, enabled TINYINT(1) NOT NULL DEFAULT 1, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, CONSTRAINT fk_user_route_container FOREIGN KEY (container_id) REFERENCES ekko_container(container_id)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+		`CREATE TABLE IF NOT EXISTS feishu_ekko_session (app_id VARCHAR(64) NOT NULL, feishu_user_id VARCHAR(128) NOT NULL, chat_id VARCHAR(128) NOT NULL, container_id VARCHAR(64) NOT NULL, ekko_session_id VARCHAR(128) NOT NULL, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, PRIMARY KEY (app_id, feishu_user_id, chat_id), CONSTRAINT fk_session_container FOREIGN KEY (container_id) REFERENCES ekko_container(container_id)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+		`CREATE TABLE IF NOT EXISTS feishu_event_dedup (app_id VARCHAR(64) NOT NULL, event_id VARCHAR(128) NOT NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (app_id, event_id)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+		`CREATE TABLE IF NOT EXISTS feishu_unmatched_identity (app_id VARCHAR(64) NOT NULL, open_id VARCHAR(128) NOT NULL, chat_id VARCHAR(128) NOT NULL DEFAULT '', first_message_id VARCHAR(128) NOT NULL DEFAULT '', latest_message_id VARCHAR(128) NOT NULL DEFAULT '', latest_message_preview VARCHAR(256) NULL, first_seen_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, last_seen_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, status VARCHAR(16) NOT NULL DEFAULT 'pending', bound_container_id VARCHAR(64) NULL, bound_at DATETIME NULL, bound_by VARCHAR(64) NULL, PRIMARY KEY (app_id, open_id)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 		`CREATE TABLE IF NOT EXISTS feishu_external_route (app_id VARCHAR(64) NOT NULL, open_id VARCHAR(128) NOT NULL, container_id VARCHAR(64) NOT NULL, username VARCHAR(128) NOT NULL, enabled TINYINT(1) NOT NULL DEFAULT 1, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, PRIMARY KEY (app_id, open_id), CONSTRAINT fk_external_route_container FOREIGN KEY (container_id) REFERENCES ekko_container(container_id)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 	} {
 		if _, err := a.db.Exec(q); err != nil {
@@ -158,10 +155,14 @@ func (a *app) migrate() error {
 	return nil
 }
 
-// migrateSQLite 使后台可在 Router 首次启动前独立创建其管理所需的表。
+// migrateSQLite 创建 SQLite 下的最终表结构，定义与 Router 保持一致。
 func (a *app) migrateSQLite() error {
 	for _, q := range []string{
-		`CREATE TABLE IF NOT EXISTS feishu_unmatched_identity (app_id TEXT NOT NULL, open_id TEXT NOT NULL, union_id TEXT NOT NULL DEFAULT '', sender_tenant_key TEXT NOT NULL DEFAULT '', chat_id TEXT NOT NULL DEFAULT '', first_message_id TEXT NOT NULL DEFAULT '', latest_message_id TEXT NOT NULL DEFAULT '', latest_message_preview TEXT, first_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, last_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, status TEXT NOT NULL DEFAULT 'pending', bound_container_id TEXT, bound_at TEXT, bound_by TEXT, PRIMARY KEY (app_id, open_id))`,
+		`CREATE TABLE IF NOT EXISTS ekko_container (container_id TEXT PRIMARY KEY, profile TEXT NOT NULL DEFAULT 'default', enabled INTEGER NOT NULL DEFAULT 1, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP)`,
+		`CREATE TABLE IF NOT EXISTS feishu_user_route (feishu_user_id TEXT PRIMARY KEY, container_id TEXT NOT NULL, username TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (container_id) REFERENCES ekko_container(container_id))`,
+		`CREATE TABLE IF NOT EXISTS feishu_ekko_session (app_id TEXT NOT NULL, feishu_user_id TEXT NOT NULL, chat_id TEXT NOT NULL, container_id TEXT NOT NULL, ekko_session_id TEXT NOT NULL, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (app_id, feishu_user_id, chat_id), FOREIGN KEY (container_id) REFERENCES ekko_container(container_id))`,
+		`CREATE TABLE IF NOT EXISTS feishu_event_dedup (app_id TEXT NOT NULL, event_id TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (app_id, event_id))`,
+		`CREATE TABLE IF NOT EXISTS feishu_unmatched_identity (app_id TEXT NOT NULL, open_id TEXT NOT NULL, chat_id TEXT NOT NULL DEFAULT '', first_message_id TEXT NOT NULL DEFAULT '', latest_message_id TEXT NOT NULL DEFAULT '', latest_message_preview TEXT, first_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, last_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, status TEXT NOT NULL DEFAULT 'pending', bound_container_id TEXT, bound_at TEXT, bound_by TEXT, PRIMARY KEY (app_id, open_id))`,
 		`CREATE TABLE IF NOT EXISTS feishu_external_route (app_id TEXT NOT NULL, open_id TEXT NOT NULL, container_id TEXT NOT NULL, username TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (app_id, open_id), FOREIGN KEY (container_id) REFERENCES ekko_container(container_id))`,
 	} {
 		if _, err := a.db.Exec(q); err != nil {

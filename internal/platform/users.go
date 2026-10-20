@@ -21,6 +21,13 @@ import (
 
 var ErrUserNotFound = errors.New("平台中未找到匹配 remark_name 的用户")
 
+const (
+	// exchangeMaxAttempts 限制单条飞书消息在令牌交换阶段的请求次数，避免下游故障时持续施压。
+	exchangeMaxAttempts = 3
+	// exchangeRetryBaseDelay 是第 1 次重试的等待时间，后续等待时间按指数增长。
+	exchangeRetryBaseDelay = 200 * time.Millisecond
+)
+
 // exchangeRequest 是交换接口要求的最小请求体。external_jwt 不会写入数据库或日志。
 type exchangeRequest struct {
 	ExternalJWT string `json:"external_jwt"`
@@ -173,27 +180,56 @@ func ExchangeExternalJWT(ctx context.Context, exchangeURL, externalJWT string) (
 	if err != nil {
 		return "", fmt.Errorf("编码令牌交换请求: %w", err)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, parsed.String(), bytes.NewReader(payload))
+	// 重试共享原有 15 秒请求预算，避免三次超时累积为 45 秒而长期占用消息处理协程。
+	exchangeCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	client := &http.Client{Timeout: 15 * time.Second}
+	for attempt := 0; attempt < exchangeMaxAttempts; attempt++ {
+		token, retryable, err := exchangeExternalJWTOnce(exchangeCtx, client, parsed.String(), payload)
+		if err == nil {
+			return token, nil
+		}
+		if !retryable || attempt == exchangeMaxAttempts-1 {
+			return "", err
+		}
+		// 使用 context 感知的等待，避免调用方取消后仍保留无意义的重试。
+		delay := exchangeRetryBaseDelay << attempt
+		select {
+		case <-exchangeCtx.Done():
+			return "", exchangeCtx.Err()
+		case <-time.After(delay):
+		}
+	}
+	return "", fmt.Errorf("令牌交换重试结束")
+}
+
+// exchangeExternalJWTOnce 执行一次令牌交换；仅返回网络错误、429 与 5xx 作为可重试错误。
+func exchangeExternalJWTOnce(ctx context.Context, client *http.Client, exchangeURL string, payload []byte) (string, bool, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, exchangeURL, bytes.NewReader(payload))
 	if err != nil {
-		return "", fmt.Errorf("创建令牌交换请求: %w", err)
+		return "", false, fmt.Errorf("创建令牌交换请求: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	response, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
+	response, err := client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("请求令牌交换接口: %w", err)
+		if ctx.Err() != nil {
+			return "", false, ctx.Err()
+		}
+		return "", true, fmt.Errorf("请求令牌交换接口: %w", err)
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("令牌交换失败，HTTP 状态 %d", response.StatusCode)
+		retryable := response.StatusCode == http.StatusTooManyRequests || response.StatusCode >= http.StatusInternalServerError
+		return "", retryable, fmt.Errorf("令牌交换失败，HTTP 状态 %d", response.StatusCode)
 	}
 	var result exchangeResponse
 	if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&result); err != nil {
-		return "", fmt.Errorf("解析令牌交换响应: %w", err)
+		return "", false, fmt.Errorf("解析令牌交换响应: %w", err)
 	}
 	if strings.TrimSpace(result.Token) == "" {
-		return "", fmt.Errorf("令牌交换响应缺少 token")
+		return "", false, fmt.Errorf("令牌交换响应缺少 token")
 	}
-	return result.Token, nil
+	return result.Token, false, nil
 }
 
 // StudioBaseURL 根据管理平台根地址和用户所属容器端口生成 Studio 根地址。

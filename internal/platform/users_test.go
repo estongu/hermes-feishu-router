@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strconv"
+	"sync/atomic"
 	"testing"
 )
 
@@ -95,6 +96,65 @@ func TestExchangeExternalJWT(t *testing.T) {
 	}
 	if token != "studio-jwt" {
 		t.Fatalf("token = %q", token)
+	}
+}
+
+// TestExchangeExternalJWTRetriesTransientFailure 验证交换接口前两次返回 503 时，
+// 函数会在有限重试后返回第三次成功响应，避免短暂下游故障直接中断消息处理。
+func TestExchangeExternalJWTRetriesTransientFailure(t *testing.T) {
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if attempts.Add(1) < exchangeMaxAttempts {
+			writer.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		_, _ = writer.Write([]byte(`{"token":"retried-studio-jwt"}`))
+	}))
+	defer server.Close()
+
+	token, err := ExchangeExternalJWT(context.Background(), server.URL, "external-jwt")
+	if err != nil {
+		t.Fatalf("ExchangeExternalJWT() error = %v", err)
+	}
+	if token != "retried-studio-jwt" {
+		t.Errorf("token = %q, want retried-studio-jwt", token)
+	}
+	if got := attempts.Load(); got != exchangeMaxAttempts {
+		t.Errorf("attempts = %d, want %d", got, exchangeMaxAttempts)
+	}
+}
+
+// TestExchangeExternalJWTRetriesTransportFailure 验证交换接口在响应前关闭连接（客户端表现为 EOF）时，
+// 函数会重试并使用后续成功响应，覆盖 Studio 容器短暂重启或连接中断的场景。
+func TestExchangeExternalJWTRetriesTransportFailure(t *testing.T) {
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		if attempts.Add(1) < exchangeMaxAttempts {
+			hijacker, ok := writer.(http.Hijacker)
+			if !ok {
+				writer.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+			connection, _, err := hijacker.Hijack()
+			if err != nil {
+				return
+			}
+			_ = connection.Close()
+			return
+		}
+		_, _ = writer.Write([]byte(`{"token":"transport-retried-studio-jwt"}`))
+	}))
+	defer server.Close()
+
+	token, err := ExchangeExternalJWT(context.Background(), server.URL, "external-jwt")
+	if err != nil {
+		t.Fatalf("ExchangeExternalJWT() error = %v", err)
+	}
+	if token != "transport-retried-studio-jwt" {
+		t.Errorf("token = %q, want transport-retried-studio-jwt", token)
+	}
+	if got := attempts.Load(); got != exchangeMaxAttempts {
+		t.Errorf("attempts = %d, want %d", got, exchangeMaxAttempts)
 	}
 }
 

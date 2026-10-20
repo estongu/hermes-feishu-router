@@ -8,6 +8,9 @@ services:
       context: .
       dockerfile: deploy/Dockerfile
       target: router
+      args:
+        # 可在 .env 或命令行中覆盖，例如 GOPROXY=https://proxy.golang.org,direct。
+        GOPROXY: ${GOPROXY:-https://goproxy.cn,direct}
     restart: unless-stopped
     environment:
       <<: *storage-environment
@@ -27,9 +30,12 @@ services:
       context: .
       dockerfile: deploy/Dockerfile
       target: admin
+      args:
+        GOPROXY: ${GOPROXY:-https://goproxy.cn,direct}
     restart: unless-stopped
     ports:
-      - "127.0.0.1:${ADMIN_PORT:-8081}:8081"
+      # 默认监听全部网卡，便于通过服务器 IP 访问后台；可在 .env 中限制为 127.0.0.1 或指定 IP。
+      - "${ADMIN_BIND_HOST:-0.0.0.0}:${ADMIN_PORT:-8081}:8081"
     environment:
       <<: *storage-environment
       ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}

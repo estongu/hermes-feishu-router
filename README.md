@@ -70,6 +70,12 @@ ADMIN_SESSION_SECRET='第二条命令输出的随机字符串'
 docker compose up -d --build
 ```
 
+构建阶段默认使用 `https://goproxy.cn,direct` 下载 Go 模块，以避免部分服务器访问 `proxy.golang.org` 超时。若服务器位于可稳定访问官方代理的网络，或需要使用企业代理，可在 `.env` 中设置 `GOPROXY` 后重新构建：
+
+```dotenv
+GOPROXY=https://proxy.golang.org,direct
+```
+
 SQLite 适合单台服务器上的一个 Router 与一个后台管理服务，数据库文件保存在 Compose 数据卷中。多实例、跨机器或高可用部署请改用 MySQL：
 
 ```bash
@@ -78,7 +84,7 @@ docker compose -f docker-compose.yml -f docker-compose.mysql.yml up -d --build
 
 MySQL 覆盖方案会额外读取 `.env` 中的 `MYSQL_PASSWORD` 与 `MYSQL_ROOT_PASSWORD`。
 
-启动成功后，后台默认位于 `http://127.0.0.1:8081`。`.env.example` 不提供可用的后台凭据；若缺少 `ADMIN_PASSWORD_HASH` 或 `ADMIN_SESSION_SECRET`，Compose 会拒绝启动。
+启动成功后，后台默认位于 `http://服务器 IP:8081`。如仅需服务器本机访问，可在 `.env` 设置 `ADMIN_BIND_HOST=127.0.0.1`；也可设置为指定服务器 IP。`.env.example` 不提供可用的后台凭据；若缺少 `ADMIN_PASSWORD_HASH` 或 `ADMIN_SESSION_SECRET`，Compose 会拒绝启动。
 
 常用运维命令：
 

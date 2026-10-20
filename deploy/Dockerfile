@@ -1,7 +1,12 @@
 # syntax=docker/dockerfile:1
 
 # Router 与后台使用独立 Go module，因此分别构建，避免运行镜像携带编译工具链。
+# 国内服务器访问 proxy.golang.org 可能超时；可在构建时通过 --build-arg GOPROXY 覆盖。
+ARG GOPROXY=https://goproxy.cn,direct
+
 FROM golang:1.26-alpine AS router-builder
+ARG GOPROXY
+ENV GOPROXY=${GOPROXY}
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
@@ -9,6 +14,8 @@ COPY . .
 RUN CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /out/hermes-feishu-router ./cmd/server
 
 FROM golang:1.26-alpine AS admin-builder
+ARG GOPROXY
+ENV GOPROXY=${GOPROXY}
 WORKDIR /src/admin
 COPY admin/go.mod admin/go.sum ./
 RUN go mod download

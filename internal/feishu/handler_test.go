@@ -45,9 +45,10 @@ type fakeStream struct {
 	closed  bool
 }
 
-func (s *fakeStream) Append(_ context.Context, text string) error { s.content += text; return nil }
-func (s *fakeStream) Flush(context.Context) error                 { return nil }
-func (s *fakeStream) Close(context.Context) error                 { s.closed = true; return nil }
+func (s *fakeStream) Append(_ context.Context, text string) error  { s.content += text; return nil }
+func (s *fakeStream) Replace(_ context.Context, text string) error { s.content = text; return nil }
+func (s *fakeStream) Flush(context.Context) error                  { return nil }
+func (s *fakeStream) Close(context.Context) error                  { s.closed = true; return nil }
 
 type fakeStreamSender struct {
 	fakeSender
@@ -89,6 +90,19 @@ func (chunkService) HandleStream(_ context.Context, _ hub.Message, onChunk func(
 	onChunk("完整")
 	onChunk("回答")
 	return "完整回答", nil
+}
+
+type repeatedChunkService struct{}
+
+// HandleStream 模拟 Studio 的累计正文在 Markdown 格式变更后被误判为增量的场景。
+// 最终返回值是权威完整答案，期望处理器覆盖重复的流式中间内容。
+func (repeatedChunkService) Handle(context.Context, hub.Message) (string, error) {
+	return "最终答案", nil
+}
+func (repeatedChunkService) HandleStream(_ context.Context, _ hub.Message, onChunk func(string)) (string, error) {
+	onChunk("最终答")
+	onChunk("最终答最终答案")
+	return "最终答案", nil
 }
 
 func (s *fakeSender) SendText(_ context.Context, chatID, text string) error {
@@ -136,6 +150,19 @@ func TestHandlerStreamsChunks(t *testing.T) {
 		t.Fatalf("Handle() error = %v", err)
 	}
 	if sender.stream == nil || sender.stream.content != "完整回答" || !sender.stream.closed {
+		t.Fatalf("stream = %#v", sender.stream)
+	}
+}
+
+// TestHandlerReplacesRepeatedStreamWithFinalReply 验证流式内容与最终答案不连续时，
+// 卡片最终只保留完整答案，不会追加一份造成重复。入参为模拟的重复流式片段，出参为最终卡片正文。
+func TestHandlerReplacesRepeatedStreamWithFinalReply(t *testing.T) {
+	sender := &fakeStreamSender{}
+	handler := NewHandler(repeatedChunkService{}, sender, true)
+	if err := handler.Handle(context.Background(), Message{EventID: "evt", AppID: "cli_bot", UserID: "user_1", ChatID: "oc_chat"}); err != nil {
+		t.Fatalf("Handle() error = %v", err)
+	}
+	if sender.stream == nil || sender.stream.content != "最终答案" || !sender.stream.closed {
 		t.Fatalf("stream = %#v", sender.stream)
 	}
 }

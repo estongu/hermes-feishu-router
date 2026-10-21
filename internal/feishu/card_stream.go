@@ -39,6 +39,15 @@ func (s *CardStream) Append(ctx context.Context, text string) error {
 	return s.update(ctx)
 }
 
+// Replace 以 text 替换当前卡片的全部正文，并立即提交更新。
+// 入参 text 是 Studio run.completed 返回的完整最终答案。
+func (s *CardStream) Replace(ctx context.Context, text string) error {
+	s.mu.Lock()
+	s.content = text
+	s.mu.Unlock()
+	return s.update(ctx)
+}
+
 // Flush 强制将当前所有内容更新到卡片。
 func (s *CardStream) Flush(ctx context.Context) error { return s.update(ctx) }
 

@@ -41,6 +41,9 @@ type CardSender interface {
 // Stream 是一条正在输出的飞书消息。
 type Stream interface {
 	Append(ctx context.Context, text string) error
+	// Replace 用最终答案整体覆盖当前卡片内容。它用于修正上游流式事件中
+	// 同时混入累计正文和增量正文时产生的重复文本。
+	Replace(ctx context.Context, text string) error
 	Flush(ctx context.Context) error
 	Close(ctx context.Context) error
 }
@@ -214,10 +217,13 @@ func (h *Handler) handleConversation(ctx context.Context, message Message) error
 				return fmt.Errorf("补充飞书流式最终内容: %w", err)
 			}
 		} else if suffix == reply && reply != streamContent {
-			// 增量与最终答案不连续时，以最终答案为准追加，保证用户不会只看到中间状态。
-			if err := stream.Append(ctx, "\n\n"+reply); err != nil {
-				return fmt.Errorf("补充飞书流式最终内容: %w", err)
+			// Studio 有时会把累计全文以不同 Markdown 格式重复推送，导致严格前缀
+			// 对比失败。不能再追加最终全文，否则重复内容会永久保留；应以完成事件
+			// 返回的权威全文直接覆盖当前卡片。
+			if err := stream.Replace(ctx, reply); err != nil {
+				return fmt.Errorf("用最终答案修正飞书流式内容: %w", err)
 			}
+			return stream.Close(ctx)
 		}
 		if err := stream.Flush(ctx); err != nil {
 			// 最终刷新也可能触发飞书的单卡编辑上限；续建一张包含完整答案的卡片，

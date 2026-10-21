@@ -37,3 +37,16 @@ func TestCardStreamThrottles(t *testing.T) {
 		t.Fatalf("flush cards=%v err=%v", controller.cards, err)
 	}
 }
+
+// TestCardStreamReplace 验证最终答案可覆盖已累计的流式内容，防止上游重复片段遗留在卡片中。
+// 入参为重复的中间正文与最终答案，出参为仅含最终答案的卡片 JSON。
+func TestCardStreamReplace(t *testing.T) {
+	controller := &fakeCardController{}
+	stream := NewCardStream(controller, "重复片段重复片段", time.Hour)
+	if err := stream.Replace(context.Background(), "最终答案"); err != nil {
+		t.Fatalf("Replace() error = %v", err)
+	}
+	if len(controller.cards) != 1 || !strings.Contains(controller.cards[0], "最终答案") || strings.Contains(controller.cards[0], "重复片段") {
+		t.Fatalf("cards = %v", controller.cards)
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/estongu/hermes-feishu-router/internal/hub"
 )
@@ -21,6 +22,22 @@ func (s fakeService) HandleStream(_ context.Context, _ hub.Message, _ func(strin
 type fakeSender struct {
 	chatID string
 	text   string
+}
+
+type blockingService struct {
+	started chan context.Context
+	release chan struct{}
+}
+
+// Handle 阻塞到测试显式放行，用于验证后台任务没有继承飞书事件的取消信号。
+func (s blockingService) Handle(ctx context.Context, _ hub.Message) (string, error) {
+	s.started <- ctx
+	<-s.release
+	return "后台回答", nil
+}
+
+func (s blockingService) HandleStream(ctx context.Context, message hub.Message, _ func(string)) (string, error) {
+	return s.Handle(ctx, message)
 }
 
 type fakeStream struct {
@@ -145,4 +162,27 @@ func TestHandlerSendsCardWhenStreamDisabled(t *testing.T) {
 	if sender.text != "**最终答案**" {
 		t.Fatalf("card content = %q", sender.text)
 	}
+}
+
+// TestHandleAsyncUsesWorkerContext 验证飞书事件 ctx 被取消后，后台 Ekko 对话仍会继续执行。
+// 入参是一个可取消的事件上下文；预期后台服务收到的 ctx 不会因该事件取消而结束。
+func TestHandleAsyncUsesWorkerContext(t *testing.T) {
+	eventCtx, cancelEvent := context.WithCancel(context.Background())
+	defer cancelEvent()
+	service := blockingService{started: make(chan context.Context, 1), release: make(chan struct{})}
+	handler := NewHandlerWithWorkerContext(context.Background(), service, &fakeSender{}, false)
+	handler.workerTimeout = time.Second
+	if err := handler.HandleAsync(eventCtx, Message{EventID: "evt", AppID: "cli_bot", UserID: "user_1", ChatID: "oc_chat", Text: "你好"}); err != nil {
+		t.Fatalf("HandleAsync() error = %v", err)
+	}
+	cancelEvent()
+	select {
+	case workerCtx := <-service.started:
+		if err := workerCtx.Err(); err != nil {
+			t.Fatalf("后台上下文被飞书事件取消: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("后台任务未启动")
+	}
+	close(service.release)
 }

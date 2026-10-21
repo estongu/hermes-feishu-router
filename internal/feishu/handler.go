@@ -7,10 +7,15 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"time"
 
 	"github.com/estongu/hermes-feishu-router/internal/hub"
 	"github.com/estongu/hermes-feishu-router/internal/model"
 )
+
+// defaultConversationTimeout 是后台对话的最长执行时间。
+// 飞书长连接事件上下文通常只有十余秒，不能直接用于模型推理。
+const defaultConversationTimeout = 5 * time.Minute
 
 // ConversationService 是飞书适配层所需的最小 Hub 能力，便于隔离 SDK 并进行单测。
 type ConversationService interface {
@@ -56,23 +61,83 @@ type Handler struct {
 	service       ConversationService
 	sender        Sender
 	streamEnabled bool
+	workerContext context.Context
+	workerTimeout time.Duration
 }
 
 // NewHandler 创建飞书消息处理器。
 func NewHandler(service ConversationService, sender Sender, streamEnabled bool) *Handler {
-	return &Handler{service: service, sender: sender, streamEnabled: streamEnabled}
+	return NewHandlerWithWorkerContext(context.Background(), service, sender, streamEnabled)
+}
+
+// NewHandlerWithWorkerContext 创建支持后台执行的消息处理器。
+// workerContext 应为服务生命周期上下文；服务停止时它会取消所有尚未完成的后台对话。
+func NewHandlerWithWorkerContext(workerContext context.Context, service ConversationService, sender Sender, streamEnabled bool) *Handler {
+	if workerContext == nil {
+		workerContext = context.Background()
+	}
+	return &Handler{
+		service:       service,
+		sender:        sender,
+		streamEnabled: streamEnabled,
+		workerContext: workerContext,
+		workerTimeout: defaultConversationTimeout,
+	}
 }
 
 // Handle 路由一条飞书消息。重复事件不会发送空消息；未配置员工路由时回复明确提示。
 func (h *Handler) Handle(ctx context.Context, message Message) error {
-	if strings.TrimSpace(message.EventID) == "" || strings.TrimSpace(message.AppID) == "" || strings.TrimSpace(message.UserID) == "" || strings.TrimSpace(message.ChatID) == "" {
-		return fmt.Errorf("飞书消息缺少 event_id、app_id、user_id 或 chat_id")
+	if err := validateMessage(message); err != nil {
+		return err
 	}
 	// 先确认收到，避免用户在 Ekko 规划与模型执行期间看到长时间空白。
 	// 最终答案（或流式答案）会作为随后的一条机器人消息发送。
-	if err := h.sender.SendText(ctx, message.ChatID, "已收到你的问题，正在处理，请稍候。"); err != nil {
+	if err := h.sendAccepted(ctx, message.ChatID); err != nil {
 		return fmt.Errorf("发送任务已接收提示: %w", err)
 	}
+	return h.handleConversation(ctx, message)
+}
+
+// HandleAsync 在飞书事件回调中快速确认消息，并在独立服务上下文中完成耗时对话。
+// 入参 ctx 仅用于本次确认消息；不能传给后台任务，否则飞书的事件截止时间会取消 Ekko 调用。
+func (h *Handler) HandleAsync(ctx context.Context, message Message) error {
+	if err := validateMessage(message); err != nil {
+		return err
+	}
+	if err := h.sendAccepted(ctx, message.ChatID); err != nil {
+		return fmt.Errorf("发送任务已接收提示: %w", err)
+	}
+	go h.handleInBackground(message)
+	return nil
+}
+
+// handleInBackground 使用服务生命周期上下文执行对话，并向用户反馈可恢复的失败。
+func (h *Handler) handleInBackground(message Message) {
+	ctx, cancel := context.WithTimeout(h.workerContext, h.workerTimeout)
+	defer cancel()
+	if err := h.handleConversation(ctx, message); err != nil {
+		log.Printf("异步处理飞书对话失败: event_id=%s chat_id=%s: %v", message.EventID, message.ChatID, err)
+		if sendErr := h.sender.SendText(ctx, message.ChatID, "处理失败，请稍后重试。"); sendErr != nil {
+			log.Printf("发送飞书对话失败提示失败: event_id=%s chat_id=%s: %v", message.EventID, message.ChatID, sendErr)
+		}
+	}
+}
+
+// validateMessage 校验进入 Hub 前必须具备的事件定位字段。
+func validateMessage(message Message) error {
+	if strings.TrimSpace(message.EventID) == "" || strings.TrimSpace(message.AppID) == "" || strings.TrimSpace(message.UserID) == "" || strings.TrimSpace(message.ChatID) == "" {
+		return fmt.Errorf("飞书消息缺少 event_id、app_id、user_id 或 chat_id")
+	}
+	return nil
+}
+
+// sendAccepted 发送立即确认，提示用户后台任务已经开始执行。
+func (h *Handler) sendAccepted(ctx context.Context, chatID string) error {
+	return h.sender.SendText(ctx, chatID, "已收到你的问题，正在处理，请稍候。")
+}
+
+// handleConversation 完成一次同步的 Hub 路由与最终回复。
+func (h *Handler) handleConversation(ctx context.Context, message Message) error {
 	hubMessage := hub.Message{
 		EventID:      message.EventID,
 		AppID:        message.AppID,

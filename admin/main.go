@@ -7,12 +7,15 @@ import (
 	"database/sql"
 	"embed"
 	"encoding/base64"
+	"encoding/csv"
 	"errors"
 	"fmt"
 	"html/template"
+	"io"
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -127,12 +130,87 @@ func main() {
 	mux.HandleFunc("/containers", a.auth(a.containers))
 	mux.HandleFunc("/routes", a.auth(a.routes))
 	mux.HandleFunc("/external-routes", a.auth(a.externalRoutes))
+	mux.HandleFunc("/routes/import", a.auth(a.importRoutes))
 	mux.HandleFunc("/containers/save", a.auth(a.saveContainer))
 	mux.HandleFunc("/routes/save", a.auth(a.saveRoute))
 	mux.HandleFunc("/external-routes/save", a.auth(a.saveExternalRoute))
 	mux.HandleFunc("/external/bind", a.auth(a.bindExternal))
 	log.Printf("Hermes Router Admin 已启动: http://127.0.0.1%s", cfg.Listen)
 	log.Fatal(http.ListenAndServe(cfg.Listen, secureHeaders(mux)))
+}
+
+// importedRoute 是路由 CSV 的一行。type 为 internal 时使用 feishu_user_id；
+// type 为 external 时使用 app_id 与 open_id。两类路由共用 container_id、username、enabled。
+type importedRoute struct {
+	line                                   int
+	routeType, feishuUserID, appID, openID string
+	containerID, username                  string
+	enabled                                bool
+}
+
+// parseRouteCSV 读取 CSV 并完成全部字段校验。输入必须包含首行：
+// type,feishu_user_id,app_id,open_id,container_id,username,enabled。
+func parseRouteCSV(input io.Reader) ([]importedRoute, error) {
+	reader := csv.NewReader(input)
+	reader.TrimLeadingSpace = true
+	header, err := reader.Read()
+	if err != nil {
+		if errors.Is(err, io.EOF) {
+			return nil, errors.New("CSV 没有表头")
+		}
+		return nil, fmt.Errorf("读取 CSV 表头: %w", err)
+	}
+	want := []string{"type", "feishu_user_id", "app_id", "open_id", "container_id", "username", "enabled"}
+	if len(header) != len(want) {
+		return nil, fmt.Errorf("CSV 表头必须为 %s", strings.Join(want, ","))
+	}
+	for i := range want {
+		if strings.TrimSpace(header[i]) != want[i] {
+			return nil, fmt.Errorf("CSV 第 %d 列应为 %s", i+1, want[i])
+		}
+	}
+
+	var imported []importedRoute
+	for line := 2; ; line++ {
+		record, err := reader.Read()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return nil, fmt.Errorf("读取 CSV 第 %d 行: %w", line, err)
+		}
+		if len(record) != len(want) {
+			return nil, fmt.Errorf("CSV 第 %d 行字段数不正确", line)
+		}
+		for i := range record {
+			record[i] = strings.TrimSpace(record[i])
+		}
+		enabled, err := strconv.ParseBool(record[6])
+		if err != nil {
+			return nil, fmt.Errorf("CSV 第 %d 行 enabled 必须是 true 或 false", line)
+		}
+		route := importedRoute{line: line, routeType: record[0], feishuUserID: record[1], appID: record[2], openID: record[3], containerID: record[4], username: record[5], enabled: enabled}
+		if route.containerID == "" || route.username == "" {
+			return nil, fmt.Errorf("CSV 第 %d 行 container_id 和 username 不能为空", line)
+		}
+		switch route.routeType {
+		case "internal":
+			if route.feishuUserID == "" || route.appID != "" || route.openID != "" {
+				return nil, fmt.Errorf("CSV 第 %d 行内部路由只允许填写 feishu_user_id", line)
+			}
+		case "external":
+			if route.appID == "" || route.openID == "" || route.feishuUserID != "" {
+				return nil, fmt.Errorf("CSV 第 %d 行外部路由只允许填写 app_id 和 open_id", line)
+			}
+		default:
+			return nil, fmt.Errorf("CSV 第 %d 行 type 必须是 internal 或 external", line)
+		}
+		imported = append(imported, route)
+	}
+	if len(imported) == 0 {
+		return nil, errors.New("CSV 没有可导入的路由")
+	}
+	return imported, nil
 }
 
 // migrate 创建后台和 Router 共用的最终表结构，确保空库中任一服务先启动都可正常工作。
@@ -314,6 +392,75 @@ func (a *app) externalRoutes(w http.ResponseWriter, r *http.Request) {
 		data["Edit"] = map[string]string{"app_id": appID, "open_id": openID, "enabled": "1"}
 	}
 	a.render(w, "external_routes.html", data)
+}
+
+// importRoutes 展示并处理内部、外部路由的统一 CSV 导入。文件先完整校验，
+// 再在一个事务中写入，因此任一行有误时数据库不会产生部分导入结果。
+func (a *app) importRoutes(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodGet {
+		a.render(w, "route_import.html", map[string]any{"Nav": "import", "Internal": r.URL.Query().Get("internal"), "External": r.URL.Query().Get("external")})
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "仅支持 GET 或 POST", http.StatusMethodNotAllowed)
+		return
+	}
+	// 限制为 2 MiB，足以覆盖常规批量配置，同时避免管理端被超大文件占用内存。
+	r.Body = http.MaxBytesReader(w, r.Body, 2<<20)
+	if err := r.ParseMultipartForm(2 << 20); err != nil {
+		http.Error(w, "导入文件不能超过 2 MiB", http.StatusBadRequest)
+		return
+	}
+	file, _, err := r.FormFile("file")
+	if err != nil {
+		http.Error(w, "请选择 CSV 文件", http.StatusBadRequest)
+		return
+	}
+	defer file.Close()
+	imported, err := parseRouteCSV(file)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := a.saveImportedRoutes(imported); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	internal, external := 0, 0
+	for _, route := range imported {
+		if route.routeType == "internal" {
+			internal++
+		} else {
+			external++
+		}
+	}
+	http.Redirect(w, r, fmt.Sprintf("/routes/import?internal=%d&external=%d", internal, external), http.StatusSeeOther)
+}
+
+// saveImportedRoutes 将已校验的路由批量写入。每条路由引用的容器均会按 default profile、启用状态自动创建。
+func (a *app) saveImportedRoutes(imported []importedRoute) error {
+	tx, err := a.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, route := range imported {
+		if err := a.ensureContainer(tx, route.containerID); err != nil {
+			return fmt.Errorf("导入第 %d 行时创建容器: %w", route.line, err)
+		}
+		if route.routeType == "internal" {
+			_, err = tx.Exec(a.upsert("route"), route.feishuUserID, route.containerID, route.username, route.enabled)
+		} else {
+			_, err = tx.Exec(a.upsert("external"), route.appID, route.openID, route.containerID, route.username, route.enabled)
+			if err == nil {
+				_, err = tx.Exec(`UPDATE feishu_unmatched_identity SET status='bound',bound_container_id=?,bound_at=?,bound_by=? WHERE app_id=? AND open_id=? AND status='pending'`, route.containerID, time.Now(), a.cfg.Auth.Username, route.appID, route.openID)
+			}
+		}
+		if err != nil {
+			return fmt.Errorf("导入第 %d 行: %w", route.line, err)
+		}
+	}
+	return tx.Commit()
 }
 
 func rows(db *sql.DB, q string) []map[string]string {

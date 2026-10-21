@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 )
@@ -207,5 +208,33 @@ func TestAccessResolver(t *testing.T) {
 	}
 	if access.BaseURL != server.URL || access.Token != "studio-token" {
 		t.Fatalf("access = %#v", access)
+	}
+}
+
+// TestAccessResolverLabelsTokenExchangeFailure 验证令牌交换失败会保留明确阶段，
+// 便于区分平台登录、用户查询与目标 Studio 容器不可达等问题。
+func TestAccessResolverLabelsTokenExchangeFailure(t *testing.T) {
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/login":
+			http.SetCookie(writer, &http.Cookie{Name: "session", Value: "ok", Path: "/"})
+		case "/api/hermes/users":
+			parsed, _ := url.Parse(server.URL)
+			port, _ := strconv.Atoi(parsed.Port())
+			_, _ = writer.Write([]byte(`[{"port":` + strconv.Itoa(port) + `,"remark_name":"test-user","external_jwt":"external-jwt"}]`))
+		case "/api/auth/exchange-external-jwt":
+			writer.WriteHeader(http.StatusServiceUnavailable)
+		}
+	}))
+	defer server.Close()
+
+	resolver, err := NewAccessResolver(server.URL, Credentials{Username: "hub", Password: "secret"})
+	if err != nil {
+		t.Fatalf("NewAccessResolver() error = %v", err)
+	}
+	_, err = resolver.Resolve(context.Background(), "test-user")
+	if err == nil || !strings.Contains(err.Error(), "交换 Studio 访问令牌") {
+		t.Fatalf("Resolve() error = %v, want token exchange stage", err)
 	}
 }

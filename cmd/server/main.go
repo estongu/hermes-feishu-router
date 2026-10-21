@@ -56,7 +56,7 @@ func main() {
 		log.Fatal(err)
 	}
 	service := hub.NewService(database, resolver, ekko.NewChatClient())
-	clients, err := newFeishuClients(cfg.Feishu.Apps, cfg.Feishu.IsStreamEnabled(), cfg.Feishu.DebugLogEvents, service)
+	clients, err := newFeishuClients(ctx, cfg.Feishu.Apps, cfg.Feishu.IsStreamEnabled(), cfg.Feishu.DebugLogEvents, service)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -88,7 +88,7 @@ func main() {
 
 // newFeishuClients 为配置的每一个飞书应用创建独立长连接。
 // 每条连接将所属 app_id 写入消息，避免同一用户在不同机器人中的会话相互混用。
-func newFeishuClients(apps []config.FeishuAppConfig, streamEnabled, debugLogEvents bool, service *hub.Service) ([]channel.Channel, error) {
+func newFeishuClients(workerContext context.Context, apps []config.FeishuAppConfig, streamEnabled, debugLogEvents bool, service *hub.Service) ([]channel.Channel, error) {
 	clients := make([]channel.Channel, 0, len(apps))
 	for _, app := range apps {
 		outbound := channeltypes.DefaultChannelConfig().Outbound
@@ -98,7 +98,7 @@ func newFeishuClients(apps []config.FeishuAppConfig, streamEnabled, debugLogEven
 		if err != nil {
 			return nil, fmt.Errorf("创建飞书应用 %s 的长连接: %w", app.Name, err)
 		}
-		handler := feishuadapter.NewHandler(service, channelSender{client: client}, streamEnabled)
+		handler := feishuadapter.NewHandlerWithWorkerContext(workerContext, service, channelSender{client: client}, streamEnabled)
 		resourceDownloader := newMessageImageDownloader(app.AppID, app.AppSecret)
 		appID := app.AppID
 		appName := app.Name
@@ -127,7 +127,9 @@ func newFeishuClients(apps []config.FeishuAppConfig, streamEnabled, debugLogEven
 			if err != nil {
 				return fmt.Errorf("飞书应用 %s: 下载富文本图片: %w", appName, err)
 			}
-			return handler.Handle(messageCtx, feishuadapter.Message{
+			// 飞书长连接事件上下文有较短截止时间。HandleAsync 会在确认消息后
+			// 将 Ekko 对话转交给服务生命周期内的后台任务，避免推理被提前取消。
+			return handler.HandleAsync(messageCtx, feishuadapter.Message{
 				EventID:    eventID,
 				AppID:      appID,
 				UserID:     identity.Value,
@@ -137,6 +139,8 @@ func newFeishuClients(apps []config.FeishuAppConfig, streamEnabled, debugLogEven
 				Images:     images,
 			})
 		})
+		// 开发者后台若订阅了表情事件，显式确认即可，避免 SDK 报“not found handler”。
+		client.OnReaction(func(context.Context, *channeltypes.ReactionEvent) error { return nil })
 		client.OnError(func(err error) { log.Printf("飞书长连接错误 app=%s: %v", appName, err) })
 		clients = append(clients, client)
 	}

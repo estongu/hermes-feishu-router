@@ -80,22 +80,23 @@ func (r *AccessResolver) Resolve(ctx context.Context, username string) (model.St
 	}
 	client, err := NewClient(r.platformBaseURL, r.credentials)
 	if err != nil {
-		return model.StudioAccess{}, err
+		return model.StudioAccess{}, fmt.Errorf("创建 Hermes 平台客户端: %w", err)
 	}
 	if err := client.Login(ctx); err != nil {
-		return model.StudioAccess{}, err
+		return model.StudioAccess{}, fmt.Errorf("登录 Hermes 平台: %w", err)
 	}
 	user, err := client.FindUserAccess(ctx, username)
 	if err != nil {
-		return model.StudioAccess{}, err
+		return model.StudioAccess{}, fmt.Errorf("查询 Hermes 用户 %q: %w", username, err)
 	}
 	studioBaseURL, err := StudioBaseURL(r.platformBaseURL, user.Port)
 	if err != nil {
-		return model.StudioAccess{}, err
+		return model.StudioAccess{}, fmt.Errorf("生成 Studio 地址: %w", err)
 	}
 	token, err := ExchangeExternalJWT(ctx, studioBaseURL+"/api/auth/exchange-external-jwt", user.ExternalJWT)
 	if err != nil {
-		return model.StudioAccess{}, err
+		// Studio 地址来自管理平台用户记录，不含令牌；保留它可直接定位容器端口或网络发布错误。
+		return model.StudioAccess{}, fmt.Errorf("交换 Studio 访问令牌（目标 %s）: %w", studioBaseURL, err)
 	}
 	return model.StudioAccess{BaseURL: studioBaseURL, Token: token}, nil
 }
